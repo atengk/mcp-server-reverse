@@ -1,0 +1,76 @@
+# ==============================================================================
+# 工作流：Python 发行包发布至 PyPI (Python Publish - PyPI)
+# 适用场景：mcp-server-reverse 发布至 PyPI 官方注册表 (pypi.org)，支持 uvx 一键拉起
+# 触发通道：
+#   - 标签推送 (push tags: v*)：与 GitHub Release 发版工作流协同触发
+#   - 网页手动触发 (workflow_dispatch)：支持指定目标版本号手动触发发布
+# 认证安全策略：
+#   - PyPI Trusted Publisher (OIDC 免密钥)：在 pypi.org 项目设置中将本仓库及工作流添加为
+#     Trusted Publisher，通过 permissions.id-token: write 实现免密自动分发。
+# ==============================================================================
+
+name: Publish (PyPI)
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '发布版本号 (形如 v1.0.0)'
+        required: true
+        type: string
+
+# 并发控制：包分发流水线单例排队执行，严禁取消
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  publish-pypi:
+    name: 构建包并发布至 PyPI
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # PyPI Trusted Publisher (OIDC) 无需静态 Token，安全便捷
+    steps:
+      - name: 解析版本号
+        id: meta
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG_NAME="${{ inputs.version }}"
+            if [[ "$TAG_NAME" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+              TAG_NAME="v$TAG_NAME"
+            fi
+          else
+            TAG_NAME="${{ github.ref_name }}"
+          fi
+          RAW_VERSION="${TAG_NAME#v}"
+          echo "tag_name=$TAG_NAME" >> "$GITHUB_OUTPUT"
+          echo "raw_version=$RAW_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: 检出源码
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.meta.outputs.tag_name }}
+
+      - name: 安装 uv 并设置 Python 环境
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          python-version: '3.12'
+
+      - name: 对齐工程版本号并编译构建发行包 (sdist & wheel)
+        run: |
+          RAW_VERSION="${{ steps.meta.outputs.raw_version }}"
+          if [ -f "pyproject.toml" ]; then
+            sed -i "s/^version = \".*\"/version = \"${RAW_VERSION}\"/" pyproject.toml
+          fi
+          uv build
+
+      - name: 发布至 PyPI (通过 OIDC 信任发布)
+        uses: pypa/gh-action-pypi-publish@release/v1

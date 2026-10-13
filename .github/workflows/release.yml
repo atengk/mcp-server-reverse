@@ -1,0 +1,148 @@
+# ==============================================================================
+# 工作流：Python 自动发版与产物挂载 (Python Release)
+# 适用场景：mcp-server-reverse 的 GitHub Release 自动化发版与 Wheel/sdist 挂载
+# 触发通道：
+#   - 网页手动触发 (workflow_dispatch)：在 Actions 界面输入版本号 (如 v1.0.0)，
+#     自动校验语义化格式、主干分支、远端标签唯一性后创建 Git Tag 并推送发版
+#   - 标签推送 (push tags: v*)：本地执行 git tag v1.0.0 && git push origin v1.0.0
+# 核心特性：
+#   - 严格分支与语义化 SemVer 双重防呆校验
+#   - 构建前自动将 pyproject.toml 版本号与 Git Tag 幂等对齐
+#   - 基于 uv build 编译标准分发制品 (sdist *.tar.gz 与 wheel *.whl)
+#   - 自动生成 SHA-256 安全校验和清单 (checksums.txt)
+#   - 基于 Conventional Commits 自动提取 git-cliff 发布更新日志
+#   - 自动创建 GitHub Release 并挂载 Wheel 包与校验和附件
+# ==============================================================================
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '发布版本号 (必须以 v 开头，符合 SemVer 规范，如 v1.0.0 或 v1.0.0-rc.1)'
+        required: true
+        type: string
+
+# 并发控制：发版流水线单例排队执行，严禁取消执行中的发版以保障版本与制品原子性
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  github-release:
+    name: 自动发版与产物挂载 (Python + uv)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # 需要推送 Git Tag 与创建 GitHub Release 权限
+    outputs:
+      tag_name: ${{ steps.release-meta.outputs.tag_name }}
+      raw_version: ${{ steps.release-meta.outputs.raw_version }}
+      is_prerelease: ${{ steps.release-meta.outputs.is_prerelease }}
+
+    steps:
+      - name: 检出源码 (全量历史供日志生成)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_PAT || secrets.GITHUB_TOKEN }}
+
+      - name: 解析与校验发版版本号 (Resolve & Validate Release Version)
+        id: release-meta
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            CURRENT_REF="${{ github.ref_name }}"
+            DEFAULT_BRANCH="${{ github.event.repository.default_branch }}"
+            if [ -n "$DEFAULT_BRANCH" ] && [ "$CURRENT_REF" != "$DEFAULT_BRANCH" ]; then
+              echo "::error::禁止在非默认主干分支 [$CURRENT_REF] 触发发版！默认主干为 [$DEFAULT_BRANCH]，请切换至主干分支后重试。"
+              exit 1
+            elif [ -z "$DEFAULT_BRANCH" ] && [ "$CURRENT_REF" != "main" ] && [ "$CURRENT_REF" != "master" ]; then
+              echo "::error::禁止在非主干分支 [$CURRENT_REF] 触发发版！仅允许在 main 或 master 分支发版。"
+              exit 1
+            fi
+
+            TAG_NAME="${{ inputs.version }}"
+            if [[ "$TAG_NAME" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+              TAG_NAME="v$TAG_NAME"
+            fi
+            if ! echo "$TAG_NAME" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'; then
+              echo "::error::版本号 [$TAG_NAME] 不符合语义化版本规范！必须形如 v1.0.0 或 v1.0.0-rc.1"
+              exit 1
+            fi
+            if git ls-remote --tags origin "refs/tags/$TAG_NAME" | grep -q "$TAG_NAME"; then
+              echo "::error::远程仓库已存在相同标签 [$TAG_NAME]，禁止重复发版！"
+              exit 1
+            fi
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git tag -a "$TAG_NAME" -m "Release $TAG_NAME"
+            git push origin "$TAG_NAME"
+            echo "已由 GitHub Actions 显式创建并推送标签: $TAG_NAME"
+          else
+            TAG_NAME="${{ github.ref_name }}"
+            if ! echo "$TAG_NAME" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'; then
+              echo "::error::推送的标签 [$TAG_NAME] 不符合语义化版本规范！必须形如 v1.0.0 或 v1.0.0-rc.1，已安全终止发版流水线。"
+              exit 1
+            fi
+          fi
+
+          RAW_VERSION="${TAG_NAME#v}"
+          echo "tag_name=$TAG_NAME" >> "$GITHUB_OUTPUT"
+          echo "raw_version=$RAW_VERSION" >> "$GITHUB_OUTPUT"
+          if [[ "$TAG_NAME" =~ - ]]; then
+            echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 安装 uv 并设置 Python 环境
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          python-version: '3.12'
+
+      - name: 对齐工程版本号并编译打包发行制品 (sdist & wheel & checksums)
+        run: |
+          RAW_VERSION="${{ steps.release-meta.outputs.raw_version }}"
+          if [ -f "pyproject.toml" ]; then
+            sed -i "s/^version = \".*\"/version = \"${RAW_VERSION}\"/" pyproject.toml
+          fi
+          mkdir -p dist
+          uv build --out-dir dist/
+          cd dist
+          if ls * >/dev/null 2>&1; then
+            sha256sum $(ls -1 | grep -v '^checksums\.txt$') > checksums.txt
+          else
+            echo "无构建产物，跳过校验和生成"
+          fi
+
+      - name: 生成发布日志 (基于 Commit 与 PR)
+        uses: orhun/git-cliff-action@v4
+        id: git-cliff
+        with:
+          config: ${{ hashFiles('.cliff.toml') != '' && '.cliff.toml' || '' }}
+          args: --tag ${{ steps.release-meta.outputs.tag_name }} --latest --strip header --github-repo ${{ github.repository }}
+        env:
+          OUTPUT: CHANGELOG_RELEASE.md
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 创建 GitHub Release 并挂载发布附件
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ steps.release-meta.outputs.tag_name }}
+          name: ${{ steps.release-meta.outputs.tag_name }}
+          body: ${{ steps.git-cliff.outputs.content }}
+          draft: false
+          prerelease: ${{ steps.release-meta.outputs.is_prerelease == 'true' }}
+          files: |
+            dist/*.whl
+            dist/*.tar.gz
+            dist/checksums.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,101 @@
+# ==============================================================================
+# 工作流：Python 多架构容器镜像构建与发布 (Python Docker - GHCR)
+# 适用场景：mcp-server-reverse 在隔离容器/远程环境中以 SSE / Streamable-HTTP 模式部署 (linux/amd64, linux/arm64)
+# 触发通道：
+#   - 主干分支推送 (push branches: main, master)：自动构建并推送带有 latest 与 short-sha 标签的镜像
+#   - 语义化标签推送 (push tags: v*)：自动解析并生成 SemVer 镜像标签 (如 v1.0.0, 1.0)
+#   - 网页手动触发 (workflow_dispatch)
+# ==============================================================================
+
+name: Docker (GHCR)
+
+on:
+  push:
+    branches: [main, master]
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+# 并发控制：同一分支有新构建时自动取消旧任务；标签构建独立执行
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-push:
+    name: 构建并推送多架构容器镜像
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write # 推送至 GHCR (ghcr.io) 所需的镜像包写入权限
+    steps:
+      - name: 转换仓库名称为全小写 (Lowercase Repository Name)
+        run: echo "REPO_LC=${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
+
+      - name: 检出源码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 检查分支提交是否关联发版标签 (防双跑自检)
+        id: check-tag
+        if: github.event_name == 'push' && github.ref_type == 'branch'
+        run: |
+          git fetch --tags --force
+          MATCHED_TAGS=$(git tag --points-at HEAD 'v*' 2>/dev/null || true)
+          if [ -n "$MATCHED_TAGS" ]; then
+            TAGS_STR=$(echo "$MATCHED_TAGS" | tr '\n' ' ' | sed 's/[[:space:]]*$//')
+            echo "检测到当前分支提交已关联语义化版本标签: [$TAGS_STR]"
+            echo "当前构建将由 Tag 流水线统一发布，自动跳过分支构建以避免重复计算与镜像竞态。"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "当前分支提交未关联发版标签，继续执行容器镜像构建。"
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 设置 QEMU 模拟器 (多架构支持)
+        if: steps.check-tag.outputs.skip != 'true'
+        uses: docker/setup-qemu-action@v4
+
+      - name: 设置 Docker Buildx
+        if: steps.check-tag.outputs.skip != 'true'
+        uses: docker/setup-buildx-action@v4
+
+      - name: 登录 GHCR
+        if: steps.check-tag.outputs.skip != 'true'
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 提取 Docker 镜像元数据 (自动计算 SemVer 标签)
+        id: meta
+        if: steps.check-tag.outputs.skip != 'true'
+        uses: docker/metadata-action@v6
+        with:
+          images: |
+            ghcr.io/${{ env.REPO_LC }}
+          flavor: |
+            latest=${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || (startsWith(github.ref, 'refs/tags/v') && !contains(github.ref, '-')) }}
+          tags: |
+            type=sha,format=short
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+
+      - name: 构建并推送多架构镜像 (amd64 / arm64)
+        if: steps.check-tag.outputs.skip != 'true'
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: false
+          sbom: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

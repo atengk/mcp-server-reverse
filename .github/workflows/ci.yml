@@ -1,0 +1,111 @@
+# ==============================================================================
+# 工作流：Python 持续集成与质量守门流水线 (Python CI)
+# 适用场景：mcp-server-reverse 的 PR 门禁、Shell 脚本检查、Ruff 静态分析与单元测试
+# 触发条件：
+#   - push: 主干分支 (main, master) 代码推送
+#   - pull_request: 针对主干分支的 PR 创建、编辑、代码同步
+# 核心特性：
+#   - Conventional Commits PR 标题规范静态校验
+#   - 工程内置自动化脚本 (scripts/*.sh) 与 Git 钩子 (.githooks/*) ShellCheck 静态分析
+#   - 基于 astral-sh/setup-uv 的极速 Python 3.12 环境与依赖缓存
+#   - Ruff 代码风格校验 (check) 与格式化校验 (format --check)
+#   - pytest 自动化单元测试与覆盖率统计
+# ==============================================================================
+
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+    types: [opened, edited, synchronize, reopened]
+
+# 并发控制：同一分支/PR 有新提交时自动取消正在执行的陈旧构建，防止竞态并节省 Runner 资源
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# 最小权限原则：仅授予代码仓库读取权限
+permissions:
+  contents: read
+
+jobs:
+  # ----------------------------------------------------------------------------
+  # Job 1: PR 标题规范校验 (仅在 PR 触发时执行)
+  # ----------------------------------------------------------------------------
+  validate-pr-title:
+    name: 校验 PR 标题规范
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    permissions:
+      pull-requests: read
+    steps:
+      - name: 校验 PR 标题符合 Conventional Commits
+        uses: amannn/action-semantic-pull-request@v6
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          types: |
+            feat
+            fix
+            docs
+            style
+            refactor
+            perf
+            test
+            build
+            ci
+            chore
+            revert
+
+  # ----------------------------------------------------------------------------
+  # Job 2: 脚本语法校验、Python 静态检查与单元测试
+  # ----------------------------------------------------------------------------
+  test:
+    name: 静态检查、格式化与测试 (Python + uv)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 检出源码
+        uses: actions/checkout@v4
+
+      - name: 静态校验工程脚本与 Git 钩子语法与规范 (Bash Syntax & ShellCheck)
+        run: |
+          if ls scripts/*.sh >/dev/null 2>&1; then
+            bash -n scripts/*.sh
+            shellcheck --severity=warning scripts/*.sh
+          fi
+          if [ -d .githooks ]; then
+            HOOK_FILES=$(grep -l '^#!' .githooks/* 2>/dev/null || true)
+            if [ -n "$HOOK_FILES" ]; then
+              echo "$HOOK_FILES" | xargs -r bash -n
+              echo "$HOOK_FILES" | xargs -r shellcheck --severity=warning
+            fi
+          fi
+
+      - name: 安装 uv 并配置 Python 环境
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          python-version: '3.12'
+
+      - name: 安装项目与开发依赖
+        run: uv sync --all-extras --dev
+
+      - name: 代码风格与语法检查 (Ruff Linter & Formatter)
+        run: |
+          if [ -d src ] || [ -d tests ]; then
+            uv run ruff check .
+            uv run ruff format --check .
+          else
+            echo "暂未发现 Python 源码目录，跳过 Ruff 检查。"
+          fi
+
+      - name: 运行单元测试与覆盖率统计
+        run: |
+          if find tests -name "test_*.py" -o -name "*_test.py" 2>/dev/null | grep -q .; then
+            uv run pytest --cov=mcp_server_reverse
+          else
+            echo "暂未发现测试用例文件，跳过 pytest 执行。"
+          fi
