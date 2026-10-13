@@ -5,7 +5,7 @@
 # 以及外部增强工具链 (radare2 + binutils/objdump)，默认以 SSE 模式安全暴露服务。
 # ==============================================================================
 
-FROM python:3.12-slim
+FROM python:3.14-slim
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
