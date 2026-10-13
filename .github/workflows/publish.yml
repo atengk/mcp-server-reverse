@@ -59,7 +59,7 @@ jobs:
           ref: ${{ steps.meta.outputs.tag_name }}
 
       - name: 安装 uv 并设置 Python 环境
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
           python-version: '3.12'
