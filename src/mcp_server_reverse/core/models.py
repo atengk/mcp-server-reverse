@@ -76,6 +76,228 @@ class ExternalCapability:
 
 
 @dataclass
+class SectionProfile:
+    """节区与段静态分布元数据画像
+
+    @param name 节区或段名称 (如 .text, .rdata, .rodata)
+    @param virtual_address 映射后的虚拟地址十六进制表示
+    @param virtual_size 虚拟内存中占用的字节尺寸
+    @param raw_offset 在磁盘文件中的物理字节偏移
+    @param raw_size 磁盘文件中占用的物理字节尺寸
+    @param permissions 访问权限字符串 (如 "r-x", "rw-", "r--")
+    @param entropy 香农熵数值 (0.0 ~ 8.0)
+    @param is_high_entropy 是否为疑似加壳或加密的高熵节区 (>= 7.2)
+    """
+
+    name: str
+    virtual_address: str
+    virtual_size: int
+    raw_offset: int
+    raw_size: int
+    permissions: str
+    entropy: float
+    is_high_entropy: bool
+
+    def to_dict(self) -> dict[str, Any]:
+        """将节区画像序列化为字典对象
+
+        @return dict[str, Any] 序列化字典字典
+        """
+        return asdict(self)
+
+
+@dataclass
+class SymbolEntry:
+    """统一抽象的导入函数、导出函数、符号或异常表恢复函数项
+
+    @param name 原始符号或函数名称
+    @param demangled_name C++ Demangle 后的可读符号名称 (若有)
+    @param library 所属动态库名称 (如 KERNEL32.dll, libc.so.6)
+    @param address 符号虚拟地址或导入表条目地址十六进制
+    @param size 符号或函数字节长度 (若已知)
+    @param symbol_type 符号类型 ("import", "export", "function", "object", "exception_frame")
+    @param category 启发式敏感行为分类标签 (若命中)
+    """
+
+    name: str
+    demangled_name: str | None = None
+    library: str | None = None
+    address: str = "0x0"
+    size: int = 0
+    symbol_type: str = "function"
+    category: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        """将符号项序列化为字典对象，包含 symbol_type 及别名 type
+
+        @return dict[str, Any] 序列化字典对象
+        """
+        res = asdict(self)
+        res["type"] = self.symbol_type
+        return res
+
+
+@dataclass
+class StringArtifact:
+    """提取的静态文本或解码动态字符串工件
+
+    @param value 字符串文本内容
+    @param encoding 编码格式 ("ascii", "utf16le", "floss_stack", "floss_decoded")
+    @param file_offset 物理文件字节偏移量
+    @param virtual_address 映射后的虚拟地址十六进制字符串
+    @param section 所属节区名称 (若位于节区内)
+    @param ioc_category 识别到的 7 类威胁情报标签之一 (若命中)
+    @param length 字符串字符长度
+    """
+
+    value: str
+    encoding: str
+    file_offset: int
+    virtual_address: str
+    section: str | None = None
+    ioc_category: str | None = None
+    length: int = 0
+
+    def to_dict(self) -> dict[str, Any]:
+        """将字符串工件序列化为字典对象
+
+        @return dict[str, Any] 序列化字典对象
+        """
+        return asdict(self)
+
+
+@dataclass
+class CryptoSignature:
+    """扫描匹配到的密码学特征魔数或常量表
+
+    @param algorithm 所属密码学算法名称 (如 AES, SHA-256, CRC32)
+    @param name 特征常量规范名称 (如 AES S-Box, SHA-256 Initial IV)
+    @param virtual_address 匹配位置的虚拟地址十六进制字符串
+    @param file_offset 物理文件中的字节偏移量
+    @param section 所属节区名称 (若有)
+    @param confidence 识别置信度 (0.0 ~ 1.0)
+    """
+
+    algorithm: str
+    name: str
+    virtual_address: str
+    file_offset: int
+    section: str | None = None
+    confidence: float = 1.0
+
+    def to_dict(self) -> dict[str, Any]:
+        """将密码学特征签名序列化为字典对象
+
+        @return dict[str, Any] 序列化字典对象
+        """
+        return asdict(self)
+
+
+@dataclass
+class HexMatch:
+    """十六进制通配符搜索命中匹配项
+
+    @param virtual_address 映射后的虚拟地址十六进制字符串
+    @param file_offset 物理文件中的字节偏移量
+    @param section 所属节区名称 (若有)
+    @param matched_hex 实际匹配到的十六进制字节序列字符串 (空格分隔)
+    """
+
+    virtual_address: str
+    file_offset: int
+    section: str | None
+    matched_hex: str
+
+    def to_dict(self) -> dict[str, Any]:
+        """将 Hex 匹配项序列化为字典对象
+
+        @return dict[str, Any] 序列化字典对象
+        """
+        return asdict(self)
+
+
+def resolve_offset_to_section_and_va(
+    offset: int,
+    sections: list[SectionProfile],
+    image_base: int,
+) -> tuple[str | None, str]:
+    """根据文件物理偏移映射其所属节区名称与绝对虚拟地址
+
+    @param offset 文件字节物理偏移
+    @param sections 节区分布画像列表
+    @param image_base 镜像基址数值
+    @return tuple[str | None, str] (节区名, 虚拟地址字符串)
+    """
+    for sec in sections:
+        if sec.raw_offset <= offset < (sec.raw_offset + sec.raw_size):
+            delta = offset - sec.raw_offset
+            va_int = int(sec.virtual_address, 16) + delta
+            return sec.name, f"0x{va_int:X}"
+
+    return None, "0x0"
+
+
+@dataclass
+class XrefRecord:
+    """静态交叉引用记录 (Code / Data Xref)
+
+    @author Ateng
+    @since 2026-10-13
+    @param from_address 发起引用的源虚拟地址十六进制字符串
+    @param to_address 被引用的目标虚拟地址十六进制字符串
+    @param xref_type 引用细分类型 ("call", "branch", "rip_relative", "pc_relative", "data_pointer")
+    @param category 引用主类别 ("code" 或 "data")
+    @param instruction 发起引用的汇编指令文本或数据指针表达式
+    @param section 发起引用所在的节区名称
+    """
+
+    from_address: str
+    to_address: str
+    xref_type: str
+    category: str
+    instruction: str | None = None
+    section: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        """将交叉引用记录序列化为字典对象
+
+        @return dict[str, Any] 序列化字典对象
+        """
+        res = asdict(self)
+        res["type"] = self.xref_type
+        return res
+
+
+@dataclass
+class DisasmInstruction:
+    """单条反汇编机器指令模型
+
+    @author Ateng
+    @since 2026-10-13
+    @param address 指令虚拟地址十六进制字符串
+    @param hex_bytes 指令机器码字节十六进制表示
+    @param mnemonic 汇编助记符 (如 lea, call, ret)
+    @param op_str 操作数表达式字符串
+    @param comment 自动计算的相对寻址目标、字符串字面量或符号内联注释
+    @param formatted 紧凑单行汇编展示文本
+    """
+
+    address: str
+    hex_bytes: str
+    mnemonic: str
+    op_str: str
+    comment: str | None = None
+    formatted: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        """将反汇编指令序列化为字典对象
+
+        @return dict[str, Any] 序列化字典对象
+        """
+        return asdict(self)
+
+
+@dataclass
 class ResponseEnvelope:
     """所有 MCP Tools 统一标准响应信封
 

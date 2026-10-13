@@ -12,6 +12,7 @@ from unittest.mock import patch
 import pytest
 
 from mcp_server_reverse.cli import build_parser, main
+from mcp_server_reverse.core.meta import get_package_version
 
 
 def test_cli_help(capsys) -> None:
@@ -32,7 +33,7 @@ def test_cli_version(capsys) -> None:
     captured = capsys.readouterr()
     output = captured.out + captured.err
     assert "mcp-server-reverse" in output
-    assert "0.1.0" in output
+    assert get_package_version() in output
 
 
 def test_cli_doctor_flag() -> None:

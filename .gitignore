@@ -81,6 +81,8 @@ samples/
 *.bndb
 *.rzdb
 !tests/fixtures/**
+tests/fixtures/**/__pycache__/
+tests/fixtures/**/*.py[cod]
 
 # ==============================================================================
 # 测试覆盖率与代码分析缓存 (Coverage & Linters)

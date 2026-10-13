@@ -13,10 +13,12 @@ def get_package_version() -> str:
 
     @return str 规范化版本号字符串
     """
-    try:
-        return version("mcp-server-reverse")
-    except PackageNotFoundError:
-        return "0.1.0"
+    for pkg_name in ("atengk-mcp-server-reverse", "mcp-server-reverse"):
+        try:
+            return version(pkg_name)
+        except PackageNotFoundError:
+            continue
+    return "1.0.0"
 
 
 def get_core_engine_versions() -> dict[str, str]:

@@ -111,7 +111,7 @@ bash scripts/commit.sh -t feat -s core -m "新增 RIP-relative 交叉引用扫�
 ### 🌐 方式一：GitHub Actions 网页端云端调度发版 (推荐首选)
 1. 前往 GitHub 仓库页面，点击顶部 **Actions** 标签页；
 2. 在左侧选择 **Release** 流水线，点击右侧 **Run workflow**；
-3. 输入目标语义化版本号（如 `v0.1.0`）并启动。
+3. 输入目标语义化版本号（如 `v1.0.0`）并启动。
 GitHub Actions 将自动校验主干分支与版本号格式、对齐 `pyproject.toml` 版本、执行 `uv build` 打包 `.whl` / `.tar.gz` 与 `checksums.txt`，并通过 `git-cliff` 生成更新日志创建 GitHub Release。
 
 ### 🚀 方式二：使用本地发版防呆脚本
@@ -119,13 +119,13 @@ GitHub Actions 将自动校验主干分支与版本号格式、对齐 `pyproject
 
 ```bash
 # 1. 安全演练模式（仅检查并打印拟执行动作，零污染 Git 历史）
-bash scripts/release.sh v0.1.0 --dry-run
+bash scripts/release.sh v1.0.0 --dry-run
 
 # 2. 交互式或指定版本号快速发版
 bash scripts/release.sh
-bash scripts/release.sh v0.1.0 -y
+bash scripts/release.sh v1.0.0 -y
 ```
 
 ### 📦 生态自动分发 (PyPI & GHCR)
-- **PyPI 官方源 ([`.github/workflows/publish.yml`](./.github/workflows/publish.yml))**：采用 [PyPI Trusted Publisher (OIDC)](https://docs.pypi.org/trusted-publishers/) 免密钥自动构建并发布，发布后支持 `uvx mcp-server-reverse` 一键拉起；
+- **PyPI 官方源 ([`.github/workflows/publish.yml`](./.github/workflows/publish.yml))**：采用 [PyPI Trusted Publisher (OIDC)](https://docs.pypi.org/trusted-publishers/) 免密钥自动构建并发布 `atengk-mcp-server-reverse`，发布后支持 `uvx atengk-mcp-server-reverse` 一键拉起；
 - **GHCR 容器镜像 ([`.github/workflows/docker.yml`](./.github/workflows/docker.yml))**：基于 `GITHUB_TOKEN` 自动构建 `linux/amd64` 与 `linux/arm64` 双架构容器镜像（内置 `radare2` 与 `binutils`），发布至 `ghcr.io/atengk/mcp-server-reverse`。

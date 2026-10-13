@@ -11,6 +11,7 @@ import pytest
 
 from mcp_server_reverse.core.config import ServerConfig
 from mcp_server_reverse.core.locator import ToolLocator
+from mcp_server_reverse.core.meta import get_package_version
 from mcp_server_reverse.server import create_mcp_server
 from mcp_server_reverse.tools.capabilities import get_capabilities_impl
 
@@ -64,5 +65,5 @@ async def test_mcp_server_call_tool_end_to_end() -> None:
     payload = json.loads(text)
     assert payload["ok"] is True
     assert payload["error"] is None
-    assert payload["data"]["version"] == "0.1.0"
+    assert payload["data"]["version"] == get_package_version()
     assert "core_engines" in payload["data"]

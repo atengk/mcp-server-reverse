@@ -39,6 +39,41 @@ wheels = [
 ]
 
 [[package]]
+name = "atengk-mcp-server-reverse"
+version = "1.0.0"
+source = { editable = "." }
+dependencies = [
+    { name = "capstone" },
+    { name = "lief" },
+    { name = "mcp", extra = ["cli"] },
+    { name = "pefile" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-cov" },
+    { name = "ruff" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "capstone", specifier = ">=5.0.0" },
+    { name = "lief", specifier = ">=0.14.0" },
+    { name = "mcp", extras = ["cli"], specifier = ">=1.2.0" },
+    { name = "pefile", specifier = ">=2023.2.7" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pytest", specifier = ">=8.3.0" },
+    { name = "pytest-asyncio", specifier = ">=0.24.0" },
+    { name = "pytest-cov", specifier = ">=5.0.0" },
+    { name = "ruff", specifier = ">=0.8.0" },
+]
+
+[[package]]
 name = "attrs"
 version = "26.1.0"
 source = { registry = "https://pypi.org/simple" }
@@ -563,41 +598,6 @@ wheels = [
 cli = [
     { name = "python-dotenv" },
     { name = "typer" },
-]
-
-[[package]]
-name = "mcp-server-reverse"
-version = "0.1.0"
-source = { editable = "." }
-dependencies = [
-    { name = "capstone" },
-    { name = "lief" },
-    { name = "mcp", extra = ["cli"] },
-    { name = "pefile" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-    { name = "pytest-cov" },
-    { name = "ruff" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "capstone", specifier = ">=5.0.0" },
-    { name = "lief", specifier = ">=0.14.0" },
-    { name = "mcp", extras = ["cli"], specifier = ">=1.2.0" },
-    { name = "pefile", specifier = ">=2023.2.7" },
-]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "pytest", specifier = ">=8.3.0" },
-    { name = "pytest-asyncio", specifier = ">=0.24.0" },
-    { name = "pytest-cov", specifier = ">=5.0.0" },
-    { name = "ruff", specifier = ">=0.8.0" },
 ]
 
 [[package]]

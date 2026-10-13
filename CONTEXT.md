@@ -5,7 +5,7 @@
 ## 领域语言 (Language)
 
 **BinarySession (二进制会话)**:
-针对单个目标二进制文件（或 Fat Mach-O 通用二进制中的特定架构切片）加载并解析后驻留在进程内 LRU 内存池中的分析上下文；单架构文件以物理文件 `SHA-256` 前 12 位作为唯一 `session_id`，多架构 Fat Binary 以 `sha256(f"{file_sha256}:{resolved_arch}")[:12]` 作为唯一 `session_id`，并在会话生命周期内惰性缓存结构元数据与交叉引用倒排索引。
+针对单个目标二进制文件（或 Fat Mach-O 通用二进制中的特定架构切片）加载并解析后驻留在进程内 LRU 内存池中的分析上下文；单架构文件以内容哈希前缀作为唯一会话标识，多架构 Fat Binary 以内容哈希与目标架构的复合摘要作为唯一会话标识，并在会话生命周期内惰性缓存结构元数据、已提取字符串与交叉引用倒排索引。
 _Avoid_: Connection (连接), Process (进程), Database (数据库), Instance (实例)
 
 **ForensicMetadata (取证元数据)**:
@@ -24,14 +24,26 @@ _Avoid_: FunctionNode (函数节点), Variable (变量), Method (方法)
 从二进制数据区提取的可打印字符序列（ASCII/UTF-8/UTF-16LE 或外部 `floss` 解码的混淆栈字符串），附带文件偏移、虚拟地址、所属节区及 IOC 威胁情报分类标签。
 _Avoid_: TextLine (文本行), LogEntry (日志项), Message (消息)
 
-**XrefRecord (交叉引用记录)**:
-机器指令或数据区指针指向目标虚拟地址（VA）的引用关系，区分代码调用（`call`）、代码分支跳转（`branch`）、指令级相对寻址数据引用（`rip_relative` / `pc_relative`，含 `ARM64` `ADRP + ADD/LDR` 双指令页偏移配对）与数据段绝对指针（`data_pointer`）。
-_Avoid_: Edge (图边), Link (超链接), Reference (普通引用)
-
-**CryptoSignature (密码学与特征签名)**:
-在二进制字节流中命中的已知算法魔数常量（如 AES S-Box、SHA-256/MD5 初始向量、CRC32 多项式表）或自定义类 IDA 十六进制通配符模式匹配结果。
+**CryptoSignature (密码学常量签名)**:
+在二进制字节流中命中的内置已知密码学算法魔数常量（如 AES S-Box / Rcon、SHA-256 / SHA-1 / MD5 初始向量、CRC32 多项式表、DES S-Box），包含算法名称、常量名称、虚拟地址、文件偏移、所属节区与置信度。
 _Avoid_: VirusSignature (病毒特征码), FileHash (文件哈希)
+
+**HexMatch (十六进制通配符匹配项)**:
+在二进制字节流中通过类 IDA 十六进制通配符模式（如 `"48 89 5C 24 ? 57"`）检索命中的字节片段记录，包含匹配的虚拟地址、文件物理偏移、所属节区与实际命中字节的十六进制表示。
+_Avoid_: RegexMatch (文本正则匹配), StringArtifact (字符串制品)
+
+**DisasmInstruction (反汇编机器指令)**:
+单条机器码指令经静态反汇编后的结构化表示，包含指令虚拟地址、原始机器码十六进制字节、助记符（Mnemonic）、操作数表达式（Operand String）、自动解析的相对寻址目标或符号/字符串内联注释以及紧凑单行格式化文本。
+_Avoid_: SourceLine (源码行), Statement (高级语言语句), Bytecode (虚拟机字节码)
+
+**XrefRecord (交叉引用记录)**:
+机器指令或数据区指针指向目标虚拟地址（VA）的引用关系，区分代码调用（`call`）、代码分支跳转（`branch`）、指令级相对寻址数据引用（`rip_relative` / `pc_relative`，含 `ARM64` `ADRP + ADD/LDR` 页偏移配对）与数据段绝对指针（`data_pointer`）。
+_Avoid_: Edge (图边), Link (超链接), Reference (普通引用)
 
 **ExternalCapability (外部工具能力)**:
 由四级跨平台依赖寻址器探测到的宿主机外部 CLI 逆向工具（`radare2`/`rizin`、`llvm-objdump`/`objdump`、`floss`）的可用状态、可执行文件绝对路径与版本元数据。
 _Avoid_: Plugin (插件), Driver (驱动), Extension (扩展)
+
+**ResponseEnvelope (统一响应信封)**:
+所有 MCP Tools 对外输出的标准顶层协议结构，统一承载执行成功标志（`ok`）、关联会话标识（`session_id`）、面向大语言模型的自然语言摘要（`summary`）、分页元数据（`pagination`）、结构化业务载荷（`data`）以及带可行动降级建议的标准化错误信息（`error`）。
+_Avoid_: RawPayload (裸载荷), HttpResult (HTTP 响应), StatusTuple (状态元组)
