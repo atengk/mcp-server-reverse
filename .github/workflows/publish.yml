@@ -72,5 +72,7 @@ jobs:
           fi
           uv build
 
-      - name: 发布至 PyPI (通过 OIDC 信任发布)
+      - name: 发布至 PyPI (支持 PYPI_API_TOKEN 与 OIDC 信任发布)
         uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.PYPI_API_TOKEN }}

@@ -13,12 +13,12 @@ ENV DEBIAN_FRONTEND=noninteractive \
     UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy
 
-# 安装外部逆向增强工具链 (radare2 提供伪代码反编译与 CFG，binutils 提供 objdump)
+# 安装外部逆向增强工具链 (binutils 提供 objdump，radare2 在可用源中按需安装)
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        radare2 \
         binutils \
         ca-certificates \
+    && (apt-get install -y --no-install-recommends radare2 || true) \
     && rm -rf /var/lib/apt/lists/*
 
 # 引入官方 uv 二进制
