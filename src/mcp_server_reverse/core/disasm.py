@@ -180,8 +180,7 @@ def disassemble_at(
     if file_off is None:
         raise LookupError(f"虚拟地址 0x{target_va:X} 无对应物理文件字节")
 
-    raw_bytes = session.file_path.read_bytes()
-    code_slice = raw_bytes[file_off : file_off + safe_count * 16]
+    code_slice = session.read_effective_bytes(file_off, safe_count * 16)
     if not code_slice:
         raise LookupError(f"虚拟地址 0x{target_va:X} 处无法读取有效指令字节")
 
@@ -342,7 +341,7 @@ def build_xref_index(session: BinarySession) -> dict[int, list[XrefRecord]]:
     if isinstance(session._xref_index, dict):
         return session._xref_index
 
-    raw_bytes = session.file_path.read_bytes()
+    raw_bytes = session.read_effective_bytes()
     sections = extract_sections(session)
     index: dict[int, list[XrefRecord]] = {}
 

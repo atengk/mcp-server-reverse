@@ -152,11 +152,10 @@ def read_memory_core(
     if file_off is None:
         raise LookupError(f"地址 {conv['va']} 位于未初始化数据段 (BSS)，无磁盘物理字节可读取")
 
-    raw_bytes = session.file_path.read_bytes()
-    if file_off >= len(raw_bytes):
+    if file_off >= session.file_size:
         raise LookupError(f"计算出的物理偏移 0x{file_off:X} 超出文件字节长度")
 
-    chunk = raw_bytes[file_off : file_off + safe_size]
+    chunk = session.read_effective_bytes(file_off, safe_size)
     start_va_int = int(conv["va"], 16)
     hexdump_lines = format_hexdump_lines(chunk, start_va_int)
 

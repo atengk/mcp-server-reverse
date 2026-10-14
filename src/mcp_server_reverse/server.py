@@ -22,6 +22,11 @@ from mcp_server_reverse.tools.disasm import (
     find_xrefs_impl,
     read_memory_impl,
 )
+from mcp_server_reverse.tools.patch import (
+    list_patches_impl,
+    patch_memory_impl,
+    revert_patch_impl,
+)
 from mcp_server_reverse.tools.scanner import (
     search_bytes_and_constants_impl,
     search_strings_impl,
@@ -455,6 +460,78 @@ def create_mcp_server(config: ServerConfig) -> MCPServer:
             session_store=session_store,
             locator=locator,
             config=config,
+        )
+
+    @server.tool(
+        name="patch_memory",
+        description=(
+            "在当前会话中对指定虚拟地址 (VA) 或文件偏移应用十六进制字节虚拟补丁 (COW 内存覆写层)，"
+            "即时影响后续反汇编与内存读取，物理磁盘上的目标文件 100% 只读保真"
+        ),
+    )
+    def patch_memory(
+        session_id: str,
+        address_or_offset: str,
+        patch_hex: str,
+        address_type: str = "va",
+    ) -> dict[str, Any]:
+        """应用会话级内存虚拟补丁
+
+        @param session_id 目标活跃分析会话标识
+        @param address_or_offset 目标虚拟地址或物理偏移字符串
+        @param patch_hex 十六进制补丁字节 (如 '90 90 CC' 或 'EB 05')
+        @param address_type 输入地址类型 ('va', 'rva', 'offset'，缺省 'va')
+        @return dict[str, Any] 补丁应用响应字典
+        """
+        return patch_memory_impl(
+            session_id=session_id,
+            address_or_offset=address_or_offset,
+            patch_hex=patch_hex,
+            address_type=address_type,
+            session_store=session_store,
+        )
+
+    @server.tool(
+        name="list_patches",
+        description="查看当前分析会话中已应用的所有写时复制 (COW) 内存虚拟补丁条目与状态",
+    )
+    def list_patches(
+        session_id: str,
+        include_reverted: bool = False,
+    ) -> dict[str, Any]:
+        """查看当前会话的全部虚拟补丁列表
+
+        @param session_id 目标活跃分析会话标识
+        @param include_reverted 是否包含已撤回的历史补丁记录 (缺省 False 仅返回激活补丁)
+        @return dict[str, Any] 补丁列表响应字典
+        """
+        return list_patches_impl(
+            session_id=session_id,
+            include_reverted=include_reverted,
+            session_store=session_store,
+        )
+
+    @server.tool(
+        name="revert_patch",
+        description=(
+            "撤回指定 ID 的内存虚拟补丁，或在未指定 patch_id 时全量原子回滚当前会话的全部补丁，"
+            "恢复至原始干净内存状态"
+        ),
+    )
+    def revert_patch(
+        session_id: str,
+        patch_id: str | None = None,
+    ) -> dict[str, Any]:
+        """撤回指定虚拟补丁或全量回滚当前会话补丁
+
+        @param session_id 目标活跃分析会话标识
+        @param patch_id 待回滚的补丁 ID (如 'patch_0001')，缺省为 None 时全量回滚
+        @return dict[str, Any] 回滚操作响应字典
+        """
+        return revert_patch_impl(
+            session_id=session_id,
+            patch_id=patch_id,
+            session_store=session_store,
         )
 
     return server

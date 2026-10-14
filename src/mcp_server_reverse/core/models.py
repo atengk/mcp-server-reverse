@@ -4,6 +4,7 @@
 @since 2026-10-13
 """
 
+import time
 from dataclasses import asdict, dataclass, field
 from enum import StrEnum
 from typing import Any
@@ -295,6 +296,49 @@ class DisasmInstruction:
         @return dict[str, Any] 序列化字典对象
         """
         return asdict(self)
+
+
+class PatchStatus(StrEnum):
+    """内存虚拟补丁状态枚举"""
+
+    ACTIVE = "active"
+    REVERTED = "reverted"
+
+
+@dataclass
+class PatchRecord:
+    """会话级写时复制 (COW) 内存虚拟补丁条目
+
+    @param patch_id 补丁唯一标识 (如 'patch_0001')
+    @param target_address 补丁应用的十六进制虚拟地址 (如 '0x140001000')
+    @param file_offset 对应的物理文件偏移量
+    @param size 补丁字节尺寸
+    @param original_bytes_hex 被覆盖前的原始字节十六进制表示
+    @param patch_bytes_hex 应用的补丁字节十六进制表示
+    @param section 所属节区名称
+    @param status 补丁状态 ('active' 或 'reverted')
+    @param created_at 补丁创建时间戳
+    """
+
+    patch_id: str
+    target_address: str
+    file_offset: int
+    size: int
+    original_bytes_hex: str
+    patch_bytes_hex: str
+    section: str
+    status: str = PatchStatus.ACTIVE.value
+    created_at: float = field(default_factory=time.time)
+    raw_patch_bytes: bytes = field(default=b"", repr=False)
+
+    def to_dict(self) -> dict[str, Any]:
+        """将补丁记录序列化为对外公开的标准字典对象
+
+        @return dict[str, Any] 序列化字典对象
+        """
+        data = asdict(self)
+        data.pop("raw_patch_bytes", None)
+        return data
 
 
 @dataclass

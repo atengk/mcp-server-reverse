@@ -12,6 +12,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from mcp_server_reverse.core.models import PatchRecord, PatchStatus
+
 
 def generate_session_id(file_sha256: str, target_arch: str | None = None) -> str:
     """生成唯一的 12 位 session_id
@@ -78,6 +80,89 @@ class BinarySession:
     pefile_binary: Any = None
     strings_cache: Any = None
     _xref_index: Any = None
+    patches: list[PatchRecord] = field(default_factory=list)
+    _patch_overlay: dict[int, int] = field(default_factory=dict)
+
+    def read_effective_bytes(self, offset: int = 0, size: int | None = None) -> bytes:
+        """从物理文件局部读取字节并透明叠加会话级写时复制 (COW) 内存虚拟补丁
+
+        避免全量读取产生 I/O 放大，通过 seek/read 精准定位指定切片。
+
+        @param offset 起始物理文件偏移量 (默认 0)
+        @param size 读取字节尺寸，None 表示读取至文件末尾
+        @return bytes 叠加补丁后的有效字节切片
+        """
+        with open(self.file_path, "rb") as f:
+            f.seek(offset)
+            raw_chunk = f.read(size) if size is not None else f.read()
+
+        chunk = bytearray(raw_chunk)
+        if self._patch_overlay:
+            for rel_idx in range(len(chunk)):
+                abs_off = offset + rel_idx
+                if abs_off in self._patch_overlay:
+                    chunk[rel_idx] = self._patch_overlay[abs_off]
+
+        return bytes(chunk)
+
+    def apply_patch(self, patch: PatchRecord, patch_bytes: bytes) -> None:
+        """在会话中应用一条内存虚拟补丁并更新写时复制覆写层
+
+        @param patch 补丁记录对象
+        @param patch_bytes 补丁字节数据
+        """
+        patch.raw_patch_bytes = patch_bytes
+        patch.status = PatchStatus.ACTIVE.value
+        self.patches.append(patch)
+        for i, b in enumerate(patch_bytes):
+            self._patch_overlay[patch.file_offset + i] = b
+        self._xref_index = None
+        self.touch()
+
+    def revert_patch(self, patch_id: str | None = None) -> list[str]:
+        """撤回指定 ID 的补丁或全量回滚当前会话全部激活补丁 (状态置为 reverted)
+
+        @param patch_id 待撤回的补丁 ID，传入 None 时全量回滚
+        @return list[str] 成功回滚的补丁 ID 列表
+        @throws LookupError 当指定补丁 ID 不存在或非激活时抛出
+        """
+        if patch_id is None:
+            reverted: list[str] = []
+            for p in self.patches:
+                if p.status == PatchStatus.ACTIVE.value:
+                    p.status = PatchStatus.REVERTED.value
+                    reverted.append(p.patch_id)
+            self._patch_overlay.clear()
+            self._xref_index = None
+            self.touch()
+            return reverted
+
+        target = next(
+            (
+                p
+                for p in self.patches
+                if p.patch_id == patch_id and p.status == PatchStatus.ACTIVE.value
+            ),
+            None,
+        )
+        if not target:
+            raise LookupError(f"未找到激活状态的补丁 ID: '{patch_id}'")
+
+        target.status = PatchStatus.REVERTED.value
+        self._patch_overlay.clear()
+        for p in self.patches:
+            if p.status == PatchStatus.ACTIVE.value:
+                p_bytes = (
+                    p.raw_patch_bytes
+                    if p.raw_patch_bytes
+                    else bytes.fromhex(p.patch_bytes_hex.replace(" ", ""))
+                )
+                for i, b in enumerate(p_bytes):
+                    self._patch_overlay[p.file_offset + i] = b
+
+        self._xref_index = None
+        self.touch()
+        return [patch_id]
 
     def touch(self) -> None:
         """更新最后访问时间戳"""

@@ -188,14 +188,14 @@ async def test_decompile_function_unavailable_and_timeout(
 
 
 @pytest.mark.asyncio
-async def test_mcp_server_registers_all_15_tools() -> None:
+async def test_mcp_server_registers_all_tools() -> None:
     from mcp_server_reverse.server import create_mcp_server
 
     server = create_mcp_server(ServerConfig())
     tools = await server.list_tools()
     tool_names = {t.name for t in tools}
 
-    expected_15_tools = {
+    expected_tools = {
         "get_capabilities",
         "open_binary",
         "list_sessions",
@@ -211,6 +211,9 @@ async def test_mcp_server_registers_all_15_tools() -> None:
         "disassemble",
         "find_xrefs",
         "decompile_function",
+        "patch_memory",
+        "list_patches",
+        "revert_patch",
     }
-    assert tool_names == expected_15_tools
-    assert len(tool_names) == 15
+    assert tool_names == expected_tools
+    assert len(tool_names) == 18
