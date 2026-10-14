@@ -20,7 +20,8 @@
 ├── docs/adr/
 │   ├── 0001-hybrid-static-analysis-engine.md
 │   ├── 0002-lru-binary-session-and-pagination.md
-│   └── 0003-lazy-xref-index-and-arm64-sliding-window.md
+│   ├── 0003-lazy-xref-index-and-arm64-sliding-window.md
+│   └── 0004-next-gen-capabilities-and-virtual-patching.md
 └── src/
 ```
 

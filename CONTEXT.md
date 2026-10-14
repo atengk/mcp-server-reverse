@@ -47,3 +47,20 @@ _Avoid_: Plugin (插件), Driver (驱动), Extension (扩展)
 **ResponseEnvelope (统一响应信封)**:
 所有 MCP Tools 对外输出的标准顶层协议结构，统一承载执行成功标志（`ok`）、关联会话标识（`session_id`）、面向大语言模型的自然语言摘要（`summary`）、分页元数据（`pagination`）、结构化业务载荷（`data`）以及带可行动降级建议的标准化错误信息（`error`）。
 _Avoid_: RawPayload (裸载荷), HttpResult (HTTP 响应), StatusTuple (状态元组)
+
+**MitigationProfile (漏洞缓解加固画像)**:
+目标二进制文件在操作系统级与编译器级启用的全套漏洞利用防御加固元数据，包含 Windows 平台（DEP/NX、ASLR、SafeSEH、CFG 控制流防护、CET 影子栈）、Linux/ELF 平台（NX、PIE 编译位置无关、RELRO 符号重定位只读保护、Stack Canary 栈金丝雀、FORTIFY_SOURCE）、macOS/Mach-O 平台（Hardened Runtime、沙盒化、代码签名限制）及综合利用难度安全评分。
+_Avoid_: SecurityCheck (安全检查), ProtectionFlag (保护标志), HardeningConfig (加固配置), ExploitDefense (漏洞防御)
+
+**BasicBlock (基本块)**:
+控制流图（CFG）中的最小原子分析单元，由满足“单入口（仅从第一条指令进入）、单出口（仅从最后一条指令离开）”的一组顺序反汇编指令序列构成；包含起始虚拟地址（VA）、终止虚拟地址、指令字节序列及后继分支跳转关系（条件成立跳转、条件不成立跳转或无条件跳转），是函数圈复杂度计算与控制流结构可视化的基础构建块。
+_Avoid_: CodeChunk (代码切片), InstructionGroup (指令组), FlowNode (流节点), BasicUnit (基本单元)
+
+**YaraMatch (YARA 规则匹配项)**:
+针对二进制文件全量字节流或特定节区执行外部 YARA 规则扫描后命中的威胁判定记录，包含规则标识符、命名空间、规则分类标签（Tags）、作者与威胁属性等元数据字典，以及所有被激活的特征字符串或十六进制模式在物理文件中的偏移量与虚拟地址（VA）定位。
+_Avoid_: AntivirusAlert (杀毒警报), RuleHit (规则命中), DetectionEvent (检出事件), SignatureMatch (签名匹配)
+
+**PatchRecord (内存虚拟补丁记录)**:
+在二进制会话生命周期内实施的写时复制（COW）内存级虚拟修改条目，记录补丁应用的目标虚拟地址（VA）或物理文件偏移、原始字节序列与替换补丁字节序列；用于支持 Agent 在只读保真物理文件的同时探索分支反转、条件规避或 What-If 假设推演，并支持会话内随时查看与原子回滚。
+_Avoid_: DiskWrite (磁盘覆写), HotPatch (热修复), FileDiff (文件差异), BinaryEdit (二进制编辑)
+
