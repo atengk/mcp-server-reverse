@@ -44,6 +44,7 @@ from mcp_server_reverse.tools.symbols import (
     get_sections_impl,
     get_symbols_impl,
 )
+from mcp_server_reverse.tools.yara import scan_yara_impl
 
 
 def create_mcp_server(config: ServerConfig) -> MCPServer:
@@ -593,6 +594,34 @@ def create_mcp_server(config: ServerConfig) -> MCPServer:
         """
         return audit_mitigations_impl(
             session_id=session_id,
+            session_store=session_store,
+        )
+
+    @server.tool(
+        name="scan_yara",
+        description=(
+            "对指定分析会话的二进制镜像执行多模式 YARA 规则匹配扫描；支持传入自定义规则文本 "
+            "(rule_text) 或规则文件路径 (rule_file)，提取命中规则名称、Tags 标签、元数据字典"
+            "以及匹配特征字符串在物理文件偏移与内存虚拟地址 (VA) 的定位。"
+            "透明感知内存虚拟补丁，未安装 yara-python 时提供语义化错误码与安装指引优雅降级"
+        ),
+    )
+    def scan_yara(
+        session_id: str,
+        rule_text: str | None = None,
+        rule_file: str | None = None,
+    ) -> dict[str, Any]:
+        """执行 YARA 规则匹配扫描
+
+        @param session_id 目标活跃分析会话标识
+        @param rule_text 自定义 YARA 规则文本字符串
+        @param rule_file YARA 规则文件本地物理绝对路径
+        @return dict[str, Any] YARA 匹配结果响应字典
+        """
+        return scan_yara_impl(
+            session_id=session_id,
+            rule_text=rule_text,
+            rule_file=rule_file,
             session_store=session_store,
         )
 

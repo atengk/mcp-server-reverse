@@ -555,3 +555,59 @@ def create_error_response(
             suggestion=suggestion,
         ),
     )
+
+
+@dataclass
+class YaraStringMatch:
+    """YARA 规则匹配中的单个特征字符串定位记录
+
+    @author Ateng
+    @since 2026-10-14
+
+    @param identifier 规则中定义的字符串标识符 (如 $s1, $payload)
+    @param offset 匹配字符串在物理文件中的绝对起始偏移量
+    @param virtual_address 匹配字符串在内存镜像中的虚拟地址 (十六进制字符串, 未映射则为 None)
+    @param data 匹配的字符串可读文本或十六进制表示
+    @param length 匹配字节长度
+    """
+
+    identifier: str
+    offset: int
+    virtual_address: str | None
+    data: str
+    length: int
+
+    def to_dict(self) -> dict[str, Any]:
+        """将匹配字符串记录序列化为字典对象
+
+        @return dict[str, Any] 序列化字典对象
+        """
+        return asdict(self)
+
+
+@dataclass
+class YaraMatch:
+    """YARA 规则命中画像
+
+    @author Ateng
+    @since 2026-10-14
+
+    @param rule 命中规则名称标识
+    @param namespace 规则所属命名空间 (缺省 'default')
+    @param tags 规则绑定的 Tags 标签列表
+    @param meta 规则内嵌的自定义元数据字典 (如 description, author)
+    @param strings 激活命中的特征字符串详情列表
+    """
+
+    rule: str
+    namespace: str = "default"
+    tags: list[str] = field(default_factory=list)
+    meta: dict[str, Any] = field(default_factory=dict)
+    strings: list[YaraStringMatch] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        """将 YARA 命中记录序列化为字典对象
+
+        @return dict[str, Any] 序列化字典对象
+        """
+        return asdict(self)
