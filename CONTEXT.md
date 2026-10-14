@@ -9,7 +9,7 @@
 _Avoid_: Connection (连接), Process (进程), Database (数据库), Instance (实例)
 
 **ForensicMetadata (取证元数据)**:
-附着于 `BinarySession` 的高价值数字取证与溯源特征集合，涵盖早于入口点执行的 `tls_callbacks`（PE TLS 回调 / ELF `.init_array`）、调试与编译指纹 `debug_info`（PDB 路径、编译时间戳、Rich Header 哈希）、文件尾部未映射附加数据 `overlay`（偏移、尺寸、香农熵）、代码签名状态 `code_signing` 及直接依赖库列表 `needed_libraries`。
+附着于 `BinarySession` 的高价值数字取证与溯源特征集合，涵盖早于入口点执行的 `tls_callbacks`（PE TLS 回调 / ELF `.init_array`）、调试与编译指纹 `debug_info`（PDB 路径、编译时间戳、Rich Header 哈希）、文件尾部未映射附加数据 `overlay`（偏移、尺寸、香农熵）、代码签名状态 `code_signing`、直接依赖库列表 `needed_libraries`、PE Rich Header 解析出的工具链构建记录 `rich_header_entries`、上下文触发分段模糊哈希 `fuzzy_hash`（SSDEEP / CTPH）以及 Apple Mach-O 代码签名中的 XML 权限清单字典 `entitlements`。
 _Avoid_: FileProperties (文件属性), ExtraAttributes (附加属性)
 
 **SectionProfile (节区画像)**:
@@ -63,4 +63,17 @@ _Avoid_: AntivirusAlert (杀毒警报), RuleHit (规则命中), DetectionEvent (
 **PatchRecord (内存虚拟补丁记录)**:
 在二进制会话生命周期内实施的写时复制（COW）内存级虚拟修改条目，记录补丁应用的目标虚拟地址（VA）或物理文件偏移、原始字节序列与替换补丁字节序列；用于支持 Agent 在只读保真物理文件的同时探索分支反转、条件规避或 What-If 假设推演，并支持会话内随时查看与原子回滚。
 _Avoid_: DiskWrite (磁盘覆写), HotPatch (热修复), FileDiff (文件差异), BinaryEdit (二进制编辑)
+
+**RichHeaderEntry (Rich Header 构建组件)**:
+Windows PE 头部未公开但广泛存在的 Rich Header 结构中记录的微软工具链组件构建指纹，包含产品唯一识别码（ProdID）、内部构建版本号（BuildNumber）以及在编译链接过程中引用的源对象/模块计数；用于精确还原目标二进制的 Visual Studio 编译器版本、环境年代以及跨样本的工具链同源性分析。
+_Avoid_: CompilerFlag (编译器标志), HeaderField (头部字段), ToolchainTag (工具链标签)
+
+**FuzzyHash (模糊哈希 / SSDEEP)**:
+采用上下文触发分段哈希（CTPH / SSDEEP）算法计算出的格式为 `<blocksize>:<h1>:<h2>` 的分段模糊签名；通过 7 字节滚动哈希与 32 位 FNV-1 分块哈希，能够在二进制文件发生局部代码插入、小幅度变异或虚拟补丁微调时，保持哈希片段的局部匹配能力，用于恶意软件家族谱系归属与相似度比对。
+_Avoid_: CryptographicHash (密码学哈希), Checksum (校验和), FileDigest (文件摘要)
+
+**LocalHighEntropyBlock (局部异常高熵块)**:
+在整体呈现低熵（如香农熵 < 6.0）的代码段或数据段内部，通过滑动窗口算法（默认 2048 字节窗口、1024 字节步长）探测并合并检出的局部高熵（香农熵 >= 7.2）连续区间；用于敏锐发现恶意样本通过隐蔽手法在常规代码或只读资源中偷渡的小型加密 Shellcode、压缩 Payload 或嵌入式配置。
+_Avoid_: EntropySlice (熵切片), SuspiciousSegment (可疑段), EncryptedRegion (加密区域)
+
 

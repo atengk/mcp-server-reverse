@@ -1,9 +1,9 @@
 # 需求规格说明书 (Spec): mcp-server-reverse 跨平台二进制静态逆向分析与数字取证 MCP Server
 
 - **状态**: 就绪可执行 (`ready-for-agent`)
-- **创建日期**: 2026-10-13
-- **遵循领域词汇表**: `BinarySession`, `ForensicMetadata`, `SectionProfile`, `SymbolEntry`, `StringArtifact`, `XrefRecord`, `CryptoSignature`, `ExternalCapability`
-- **遵循架构决策**: ADR-0001, ADR-0002, ADR-0003, ADR-0004
+- **创建日期**: 2026-10-13 (v1.0.0 基线) / 2026-10-14 (v1.1.0 进阶演进)
+- **遵循领域词汇表**: `BinarySession`, `ForensicMetadata`, `SectionProfile`, `SymbolEntry`, `StringArtifact`, `XrefRecord`, `CryptoSignature`, `ExternalCapability`, `MitigationProfile`, `BasicBlock`, `YaraMatch`, `PatchRecord`, `RichHeaderEntry`, `FuzzyHash`, `LocalHighEntropyBlock`
+- **遵循架构决策**: ADR-0001, ADR-0002, ADR-0003, ADR-0004, ADR-0005, ADR-0006
 
 ---
 
@@ -14,8 +14,8 @@
 1. **重型逆向软件依赖门槛高，难以开箱即用**：传统逆向分析强依赖 IDA Pro、Ghidra、Binary Ninja 或本地编译的 Radare2 等庞大外部软件。在未安装这些软件的普通开发机或轻量级环境上，Agent 甚至无法完成基础的二进制文件结构探查与反汇编。
 2. **现代 64 位二进制的相对寻址导致引用链断裂**：在 `x86_64` 与 `ARM64` 架构下，代码对字符串、全局变量及导入表桩函数的引用普遍采用指令指针相对寻址（如 `x86_64` 的 `RIP-relative` 或 `ARM64` 的 `ADRP + ADD/LDR` 双指令组合），而非硬编码绝对虚拟地址。单纯依靠字节搜索或 `strings` 工具无法建立字符串与函数之间的交叉引用关系（`XrefRecord`）。
 3. **无符号（Stripped）与恶意样本的关键取证线索隐蔽**：生产级程序与恶意样本普遍剥离了符号表（`.symtab`），且恶意软件常将反调试与解密入口隐藏在早于 `entry_point` 执行的 PE TLS 回调函数中，或将载荷隐藏在节区末尾未映射的 Overlay 附加数据中。缺乏深度取证元数据（`ForensicMetadata`）与基于异常表（PE64 `.pdata`）的函数恢复能力，会导致 Agent 遗漏真正的核心逻辑。
-4. **重复解析耗时与海量输出撑爆上下文窗口**：几十 MB 的二进制文件包含上万条导入符号、字符串与反汇编指令。若每次工具调用都从磁盘重新解析，且不加分页地返回全量数据，不仅会引发严重的 CPU/I/O 阻塞，还会瞬间撑爆大模型的 Token 上下文窗口。
-5. **缺少统一的沙箱边界与远程隔离部署能力**：分析高危未知样本时需要在受控目录白名单、文件体积上限或远程隔离容器中进行，现有工具缺乏标准化的路径防穿越沙箱、双模传输（`stdio` + `sse`/`streamable-http`）与分级健康自检探针。
+4. **假设性逆向推演（What-If）与物理样本保真冲突**：在漏洞验证与分支探索中，Agent 迫切需要反转关键跳转或注入虚拟 NOP，但数字取证铁律严禁在物理磁盘上覆写或产生临时文件污染环境。
+5. **控制流抽象与威胁规则生态缺失**：平铺的反汇编指令缺乏单入口单出口基本块（`BasicBlock`）与图形化流程拓扑表达；大节区内部微型 Shellcode 极易被全局香农熵稀释；且缺乏对行业标准 YARA 规则与全平台漏洞缓解机制的开箱即用评估。
 
 ---
 
@@ -23,21 +23,22 @@
 
 构建 `mcp-server-reverse`——专为 AI Agent 打造的跨平台二进制静态逆向分析与数字取证（DFIR）MCP Server：
 
-1. **纯 Python 静态分析内核 + 按需外部 CLI 混合引擎（遵循 ADR-0001）**：
-   - **纯 Python 核心层（100% 兜底可用）**：基于 `lief`、`pefile` 与 `capstone`，零外部软件依赖即可原生支持 PE、ELF、Mach-O（含 Fat Universal Binary 多架构切片）三大格式的 14 项核心静态逆向分析能力。
-   - **外部 CLI 增强层（按需动态激活）**：通过四级跨平台寻址器探测宿主机上的 `radare2`/`rizin`、`llvm-objdump`/`objdump` 与 `floss`（`ExternalCapability`），无缝解锁类 C 伪代码反编译（`decompile_function`）与混淆栈字符串解码；当外部工具未安装时，提供区分式优雅降级（反编译返回结构化引导，字符串提取自动软回退至内置引擎）。
+1. **纯 Python 静态分析内核 + 按需外部 CLI 混合引擎（遵循 ADR-0001、ADR-0003）**：
+   - **纯 Python 核心层（100% 兜底可用）**：基于 `lief`、`pefile` 与 `capstone`，零外部软件依赖即可原生支持 PE、ELF、Mach-O 三大格式的 19 项核心静态逆向分析能力。
+   - **外部 CLI 增强层（按需动态激活）**：通过四级跨平台寻址器探测宿主机上的 `radare2`/`rizin`、`llvm-objdump`/`objdump`、`floss` 与 `yara`（`ExternalCapability`），无缝解锁类 C 伪代码反编译（`decompile_function`）、混淆栈字符串解码与 YARA 规则匹配。
 2. **进程内 LRU `BinarySession` 缓存池与渐进式披露（遵循 ADR-0002）**：
    - 以文件 `SHA-256` 前 12 位（Fat Binary 结合所选架构切片生成复合哈希）作为唯一 `session_id`，在内存中驻留最多 `8` 个活跃 `BinarySession`；
    - 所有检索与列表工具强制分页（`offset`/`limit`）并统一包裹在标准响应信封中，反汇编指令采用紧凑单行格式并内联字符串/符号注释。
-3. **纵深数字取证（`ForensicMetadata`）与无符号函数恢复**：
-   - 在 `open_binary` 中一站式提取文件哈希（含 Imphash）、安全防护标志（PIE/NX/Canary）、节区香农熵、敏感 API 行为分类统计，以及 `ForensicMetadata`（TLS 回调列表、PDB 调试路径、编译时间戳、Rich Header 哈希、Overlay 尾部附加数据及熵值、代码签名状态、依赖库列表）；
-   - 在 `get_symbols` 中自动解析 x64 PE `.pdata` 异常目录（`IMAGE_DIRECTORY_ENTRY_EXCEPTION`），为去符号二进制自动恢复 `sub_<va>`（`type="exception_frame"`）内部函数起止边界。
-4. **基于 Capstone 的指令级相对寻址 `XrefRecord` 引擎与惰性索引（遵循 ADR-0003）**：
-   - 支持 `x86_64` `RIP-relative`、`ARM64` 4 指令滑动窗口 `ADRP + ADD/LDR` 页偏移配对、直接分支指令（`call`/`jmp`/`bl`/`b`）及数据段绝对指针（`data_pointer`）扫描；
-   - 首次调用 `find_xrefs` 时通过后台线程惰性构建会话级倒排索引并缓存，使同一会话后续交叉引用查询达到毫秒级 $O(1)$ 命中。
-5. **四级跨平台寻址、分级健康探针与沙箱安全守卫（遵循 ADR-0004）**：
-   - 实现 `CLI > MCP_REVERSE_* 环境变量 > PATH > OS 标准安装路径` 四级外部工具寻址与 `--check` / `--doctor` 分级探针；
-   - 内置 `--allowed-dir` 目录白名单沙箱、`--max-file-size-mb` 体积熔断与远程 Bearer Token 鉴权。
+3. **基于 Capstone 的指令级相对寻址交叉引用引擎（遵循 ADR-0004）**：
+   - 精确计算 `x86_64` `RIP-relative`、`ARM64` 4 指令滑动窗口 `ADRP + ADD/LDR` 页偏移配对、直接控制流分支指令及数据段绝对指针；首次查询通过后台线程惰性构建会话级倒排索引，同会话后续查询毫秒级 $O(1)$ 命中。
+4. **会话级写时复制 (COW) 内存虚拟补丁套件（遵循 ADR-0005）**：
+   - 目标物理文件 100% 只读保真；在会话内存中维护轻量级补丁覆写层（`PatchRecord`），支持十六进制原子打补丁（`patch_memory`）、补丁清单审阅（`list_patches`）与原子回滚（`revert_patch`），透明穿透影响反汇编与控制流分析。
+5. **控制流图拓扑抽取、缓解审计、滑动高熵与纵深取证（遵循 ADR-0006）**：
+   - **CFG 与 Mermaid 可视化 (`analyze_cfg`)**：切分基本块、分析分支走向并直接渲染原生 Mermaid `flowchart TD` 流程图；
+   - **全平台缓解机制量化审计 (`audit_mitigations`)**：系统化审计 Windows/Linux/macOS 漏洞利用防御措施并给出 0~100 加固安全评分；
+   - **滑动窗口局部高熵块细粒度探测 (`get_sections`)**：以 2KB~4KB 滑动窗口穿透大节区，捕捉隐蔽加密/加壳载荷；
+   - **独立 YARA 规则即时扫描 (`scan_yara`)**：支持规则文本/文件匹配，映射命中特征字符串的文件偏移与 VA；
+   - **深度取证指纹扩展 (`open_binary`)**：一站式提取 PE Rich Header 编译器版本工具链映射、纯 Python SSDEEP 模糊哈希与 Mach-O XML Entitlements 清单。
 
 ---
 
@@ -86,6 +87,27 @@
 32. 作为一名运维或开发人员，我希望在命令行执行 `mcp-server-reverse --check`（或 `--doctor`）运行分级健康探针：当核心库与白名单目录正常时返回退出码 `0`（外部工具缺失仅提示 `[OPTIONAL]`），而当核心库异常或我显式传入了不存在的 `--r2-path` / `--objdump-path` / `--floss-path` 时返回退出码 `1`，以便集成至 Docker `HEALTHCHECK` 与 CI 门禁。
 33. 作为一名开发者，我希望服务支持 `CLI 参数 > MCP_REVERSE_* 环境变量 > 默认值` 三级配置决议，并支持 `stdio`（本地客户端直连）与 `sse` / `streamable-http`（含可选 `--auth-token` Bearer 鉴权）双模传输，同时将所有运行日志强制输出至 `sys.stderr` 以保障 `stdio` JSON-RPC 管道绝对纯净。
 
+### 六、写时复制 (COW) 内存虚拟补丁套件 (`PatchRecord`)
+34. 作为一名安全研究 Agent，在验证漏洞利用或逆向推演时，我希望调用 `patch_memory` 对指定虚拟地址或文件物理偏移应用十六进制字节修改（如分支反转 `JZ` -> `JNZ` 或填充 `NOP`），同时保障底层物理文件 100% 只读保真无改动。
+35. 作为一名逆向分析 Agent，打完补丁后，我希望后续所有内存读取（`read_memory`）、反汇编（`disassemble`）及控制流分析（`analyze_cfg`）能够即时透明叠加反映最新修改，以便无缝开展 What-If 假设推演。
+36. 作为一名安全分析 Agent，我希望调用 `list_patches` 查看当前会话所有已激活的虚拟补丁记录（含原始/替换字节及时间戳），并能调用 `revert_patch` 按 `patch_id` 单项撤回或缺省一键回滚全部补丁恢复初始净室内存镜像。
+
+### 七、函数控制流图 (CFG) 与 Mermaid 可视化 (`BasicBlock`)
+37. 作为一名逆向分析 Agent，我希望调用 `analyze_cfg` 对指定函数进行静态控制流切分，获取单入口单出口的基本块（`BasicBlock`）边界、指令流、分支跳转后继边（真跳转、假跳转、无条件跳转）以及函数整体圈复杂度，以便把握复杂混淆逻辑的执行脉络。
+38. 作为一名大模型 Agent，我希望 `analyze_cfg` 在响应中直接包含标准化紧凑的 Mermaid `flowchart TD` 流程图语法文本，以便在前端 UI 或会话中以图形化方式直观呈现控制流拓扑结构。
+
+### 八、全平台漏洞利用缓解机制量化审计与评分 (`MitigationProfile`)
+39. 作为一名攻防研究 Agent，我希望调用 `audit_mitigations` 一键全面审计 Windows（DEP/ASLR/SafeSEH/CFG/CET）、Linux（NX/PIE/RELRO/Stack Canary/FORTIFY）与 macOS（PIE/代码签名/Hardened Runtime）平台的利用防护特性。
+40. 作为一名安全评估 Agent，我希望 `audit_mitigations` 返回 0~100 加权安全评分及利用难度评级（Low/Medium/High/Extreme），并针对缺失的防御措施提供明确的编译加固指引。
+
+### 九、节区局部高熵块探测与独立 YARA 扫描 (`LocalHighEntropyBlock` & `YaraMatch`)
+41. 作为一名恶意代码研判 Agent，针对大节区平均香农熵被稀释的隐蔽样本，我希望在 `get_sections` 中启用 `detect_local_entropy=True` 滑动窗口扫描，精准发现局部连续异常高熵块（`LocalHighEntropyBlock`）的起始偏移与 VA，以便快速捕获嵌入式加密 Shellcode。
+42. 作为一名威胁情报 Agent，我希望调用 `scan_yara` 并传入即时 YARA 规则文本或规则文件路径，在当前分析会话内存镜像中执行特征匹配，精确映射所有命中特征字符串的物理偏移与虚拟内存地址（VA），并在本机未安装 `yara-python` 时收到结构化降级指引。
+
+### 十、PE Rich Header、SSDEEP 模糊哈希与 Mach-O Entitlements 深度取证 (`RichHeaderEntry` & `FuzzyHash`)
+43. 作为一名数字取证与威胁溯源 Agent，我希望在 `open_binary` 中自动提取 PE Rich Header 中的编译器构建工具链组件清单（`rich_header_entries`），反查 Visual Studio 内部编译器版本与对象计数，以便精准推断攻击者编译环境与年代。
+44. 作为一名恶意软件家族聚类 Agent，我希望在 `open_binary` 中获取二进制文件的标准 SSDEEP 上下文触发分段模糊哈希（`fuzzy_hash`）以及从 Mach-O `LC_CODE_SIGNATURE` 中反序列化出的 XML 权限清单字典（`entitlements`），以便快速开展家族谱系同源比对与沙箱特权分析。
+
 ---
 
 ## Implementation Decisions (实现决策)
@@ -98,11 +120,14 @@
    - **跨格式结构与取证解析层 (`BinaryParser`)**：以 `lief` 作为 PE/ELF/Mach-O 统一抽象底座，提取节区、导入、导出、符号及安全缓解标志；针对 PE 格式联动 `pefile` 提取 Imphash、Rich Header 哈希、TLS 回调函数地址、PDB 路径、编译时间戳、Authenticode 签名存在性、尾部未映射 Overlay 数据及 x64 `.pdata` 异常目录函数表（合成为 `type="exception_frame"` 的 `SymbolEntry`）。
    - **反汇编与交叉引用引擎 (`DisasmEngine`)**：基于 `capstone`（开启 `detail=True`）提供多架构反汇编（支持 `stop_at_ret` 单函数截断与内联字符串/符号注释）及全节区交叉引用扫描。`x86_64` 精确计算 `RIP-relative`（`insn.address + insn.size + disp`）；`ARM64` 维护 4 指令滑动窗口寄存器状态表以配对 `ADRP + ADD/LDR` 页基址与偏移；数据节区按指针位宽扫描绝对指针引用。全节区扫描通过 `asyncio.to_thread` 卸载并设置单节区 `16MB` 安全上限。
    - **启发式特征与字符串扫描层 (`SignatureScanner`)**：实现字节流香农熵计算、ASCII/UTF-16LE 可打印字符串正则扫描、7 类 IOC 正则打标、8 类敏感导入 API 分类字典、类 IDA 十六进制通配符（`?`/`??`）字节码转正则搜索，以及内置密码学魔数常量特征库（AES S-Box / Rcon、SHA-256 / SHA-1 / MD5 IV、CRC32 表、DES S-Box）。
-   - **外部子进程适配层 (`ExternalRunner`)**：通过 `asyncio.create_subprocess_exec`（禁用 `shell=True`）带超时控制调用 `radare2`/`rizin`（执行 `aaa; afllj; pdc` 获取伪代码与基本块数）和 `floss`（提取栈字符串与混淆字符串）。
-   - **MCP 工具接入薄层**：按职责划分为 5 个工具组（会话与分诊、结构与符号、字符串与特征、反汇编与交叉引用、外部增强与能力自检），共暴露 15 个正交 MCP Tools，仅负责入参校验、调用核心层并封装统一响应信封。
+    - **外部子进程适配层 (`ExternalRunner`)**：通过 `asyncio.create_subprocess_exec`（禁用 `shell=True`）带超时控制调用 `radare2`/`rizin`（执行 `aaa; afllj; pdc` 获取伪代码与基本块数）和 `floss`（提取栈字符串与混淆字符串）。
+    - **内存虚拟补丁管理器**：在 `BinarySession` 内部管理写时复制（COW）切片，透明拦截底层 `read_bytes`，实现内存补丁即时生效与零磁盘污染。
+    - **控制流拓扑分析器 (`CFGAnalyzer`)**：遍历 Capstone 指令流，切分基本块、识别分支走向（真/假/无条件跳转）、计算圈复杂度并直接输出 Mermaid `flowchart TD`。
+    - **漏洞缓解与取证分析引擎**：跨平台解析 DEP/ASLR/CFG/CET/RELRO/Canary，加权计算安全评分；纯 Python 实现 SSDEEP 模糊哈希；解析 PE Rich Header 工具链与 Mach-O XML Entitlements。
+    - **MCP 工具接入薄层**：按职责划分为 6 个正交工具组，共暴露 21 个 MCP Tools，仅负责入参校验、调用核心层并封装统一响应信封。
 
 2. **统一响应信封与标准错误码契约**：
-   所有 15 个 MCP Tools 统一返回如下 JSON 结构（集合字段无匹配数据时严格返回 `[]`，绝不返回 `null`）：
+   所有 21 个 MCP Tools 统一返回如下 JSON 结构（集合字段无匹配数据时严格返回 `[]`，绝不返回 `null`）：
    ```json
    {
      "ok": true,
@@ -118,7 +143,7 @@
      "error": null
    }
    ```
-   当发生受控业务错误时，返回 `ok: false` 及 `error: { "code": str, "message": str, "suggestion": str }`，错误码严格限定为以下 9 个枚举值：
+   当发生受控业务错误时，返回 `ok: false` 及 `error: { "code": str, "message": str, "suggestion": str }`，标准错误码包含：
    - `SANDBOX_PATH_FORBIDDEN`
    - `FILE_NOT_FOUND`
    - `FILE_TOO_LARGE`
@@ -129,21 +154,27 @@
    - `EXTERNAL_TOOL_UNAVAILABLE`
    - `EXTERNAL_TOOL_TIMEOUT`
 
-3. **15 个 MCP Tools 接口签名与响应契约**：
-   - `open_binary(file_path: str, target_arch: Optional[str] = None, force_reload: bool = False)` -> 返回 `session_id`, `file_info`, `format_info`（含 `available_architectures`）, `triage_overview`, `forensic_metadata`（含 `tls_callbacks`, `debug_info`, `overlay`, `code_signing`, `needed_libraries`）。
+3. **21 个 MCP Tools 接口签名与响应契约**：
+   - `open_binary(file_path: str, target_arch: Optional[str] = None, force_reload: bool = False)` -> 返回 `session_id`, `file_info`, `format_info`（含 `available_architectures`）, `triage_overview`, `forensic_metadata`（含 `tls_callbacks`, `debug_info`, `overlay`, `code_signing`, `needed_libraries`, `rich_header_entries`, `fuzzy_hash`, `entitlements`）。
    - `list_sessions()` -> 返回 `sessions: List[...]`。
    - `close_session(session_id: Optional[str] = None)` -> 返回 `{ closed_count, remaining_sessions }`。
-   - `get_sections(session_id: str)` -> 返回 `sections: List[SectionProfile]`（含 `entropy` 与 `is_high_entropy`）。
+   - `get_sections(session_id: str, detect_local_entropy: bool = False, window_size: int = 2048, step: int = 1024)` -> 返回 `sections: List[SectionProfile]`（含全局 `entropy`、`is_high_entropy` 及可选 `local_high_entropy_blocks`）。
    - `get_imports(session_id: str, library_filter: Optional[str] = None, name_filter: Optional[str] = None, category: Optional[str] = None, offset: int = 0, limit: int = 50)` -> 返回分页 `imports: List[SymbolEntry]`。
    - `get_exports(session_id: str, name_filter: Optional[str] = None, offset: int = 0, limit: int = 50)` -> 返回分页 `exports: List[...]`。
    - `get_symbols(session_id: str, name_filter: Optional[str] = None, symbol_type: Optional[str] = None, offset: int = 0, limit: int = 50)` -> 返回分页 `symbols: List[SymbolEntry]`（含 PE64 `.pdata` `exception_frame` 函数）。
-   - `search_strings(session_id: str, pattern: Optional[str] = None, ioc_category: Optional[str] = None, encoding: str = "all", min_length: int = 4, section_name: Optional[str] = None, use_floss: bool = False, offset: int = 0, limit: int = 50)` -> 返回分页 `strings: List[StringArtifact]` 与 `floss_status: Optional[str]`（未安装 `floss` 时自动软降级保持 `ok: true`）。
+   - `search_strings(session_id: str, pattern: Optional[str] = None, ioc_category: Optional[str] = None, encoding: str = "all", min_length: int = 4, section_name: Optional[str] = None, use_floss: bool = False, offset: int = 0, limit: int = 50)` -> 返回分页 `strings: List[StringArtifact]` 与 `floss_status: Optional[str]`。
    - `search_bytes_and_constants(session_id: str, hex_pattern: Optional[str] = None, scan_crypto: bool = True, limit: int = 50)` -> 返回 `{ pattern_matches: List[...], crypto_constants: List[CryptoSignature] }`。
+   - `scan_yara(session_id: str, source: Optional[str] = None, filepath: Optional[str] = None)` -> 返回 `{ matches: List[YaraMatch], total_matches, compiler_status }`。
    - `disassemble(session_id: str, target: str, instruction_count: int = 40, stop_at_ret: bool = False, arch_override: Optional[str] = None)` -> 返回 `{ start_address, arch, resolved_symbol, stopped_at_ret, instructions: List[str] }`。
    - `find_xrefs(session_id: str, target_address: str, xref_type: str = "all", limit: int = 50)` -> 返回分页 `xrefs: List[XrefRecord]`。
    - `read_memory(session_id: str, address_or_offset: str, address_type: str = "va", length: int = 128)` -> 返回 `{ virtual_address, file_offset, section, hex_bytes, hexdump_lines: List[str] }`。
    - `convert_address(session_id: str, value: str, from_type: str = "va")` -> 返回 `{ va, rva, file_offset, section_name, permissions }`。
-   - `decompile_function(session_id: str, target: str, timeout_seconds: int = 30)` -> 返回 `{ engine, target, pseudocode, basic_blocks }`（未安装 `radare2`/`rizin` 时返回 `ok: false` 与 `EXTERNAL_TOOL_UNAVAILABLE`）。
+   - `analyze_cfg(session_id: str, target: str)` -> 返回 `{ function_entry, basic_blocks: List[BasicBlock], block_count, cyclomatic_complexity, mermaid_flowchart }`。
+   - `patch_memory(session_id: str, target: str, patch_hex: str, target_type: str = "va")` -> 返回 `{ patch_id, virtual_address, file_offset, original_hex, patched_hex, status }`。
+   - `list_patches(session_id: str)` -> 返回 `{ patches: List[PatchRecord], total_active_patches }`。
+   - `revert_patch(session_id: str, patch_id: Optional[str] = None)` -> 返回 `{ reverted_patch_id, remaining_patches_count, status }`。
+   - `audit_mitigations(session_id: str)` -> 返回 `{ format, arch, mitigations: MitigationProfile, security_score, exploit_difficulty }`。
+   - `decompile_function(session_id: str, target: str, timeout_seconds: int = 30)` -> 返回 `{ engine, target, pseudocode, basic_blocks }`。
    - `get_capabilities()` -> 返回 `{ version, python_version, core_engines, external_tools, sandbox }`。
 
 ---
@@ -153,30 +184,18 @@
 1. **好测试的核心准则（仅测试外部可见契约，不耦合内部实现细节）**：
    - 测试必须聚焦于调用者（AI Agent 或 CLI 用户）可感知的输入与输出行为：给定目标二进制文件与工具入参，断言返回的统一信封字段（`ok`、`session_id`、`pagination`、`data`、`error.code`）及 CLI 退出码，不直接断言私有缓存结构或内部解析器中间变量。
 2. **最高层测试接缝 (Testing Seams)**：
-   - **主接缝（MCP Tool 顶层函数边界 & CLI `main(argv)` 边界）**：所有核心逆向能力直接通过调用 15 个 MCP Tool 函数与 CLI 入口函数进行端到端验证。
-   - **动态合成真实二进制夹具 (`Synthetic Binary Fixtures`)**：在测试夹具中动态构造最小合法的 64 位 **PE64** 与 **ELF64** 二进制样本文件（零外部样本文件依赖）：
-     - `.text` 可执行节区：内嵌真实 `x86_64` 机器指令序列（`push rbp; mov rbp, rsp; lea rcx, [rip + disp]; call rel32; xor eax, eax; pop rbp; ret; int3`），其中 `lea rcx, [rip + disp]` 精确指向数据节区中的测试 URL 字符串 VA；
-     - `.rdata` / `.rodata` 数据节区：内嵌测试 URL（`"https://api.example.com/v1/token"`）、IPv4 地址（`"192.168.10.25"`）、注册表路径、UTF-16LE 宽字符序列、指向代码入口的 64 位绝对数据指针，以及标准 256 字节 **AES S-Box** 常量表；
-     - 导入表与导出表：包含敏感 API 导入项（如 `KERNEL32.dll!VirtualAllocEx`、`WS2_32.dll!WSAStartup`）与导出函数 `reverse_test_entry`；
-     - PE 扩展结构：包含 `.pdata` 异常目录条目与文件尾部 Overlay 附加字节块。
-   - **外部子进程轻量替身接缝 (`Subprocess Seam`)**：仅在验证外部工具（`radare2` / `floss`）的“成功输出解析”、“超时熔断（`EXTERNAL_TOOL_TIMEOUT`）”与“未安装降级（`EXTERNAL_TOOL_UNAVAILABLE` / `floss_status` 软回退）”时，在外部命令执行/寻址边界使用轻量替身，确保测试套件在无外部逆向工具的任意环境中 100% 稳定通过。
-3. **测试覆盖模块矩阵**：
-   - CLI 参数解析、环境变量优先级覆盖与 `--check` / `--doctor` 分级退出码测试；
-   - `SecurityGuard` 目录白名单防穿越、文件超限熔断与四级外部工具寻址优先级测试；
-   - `BinarySession` LRU 淘汰、取证元数据（`ForensicMetadata`）、节区熵计算、导入导出分类过滤与 `.pdata` 无符号函数恢复测试；
-   - 字符串提取、IOC 分类打标、`use_floss=True` 自动软降级、AES S-Box 识别与十六进制通配符搜索测试；
-   - `disassemble`（含内联相对寻址注释与 `stop_at_ret=True` 截断）、`find_xrefs`（含会话级惰性索引复用、代码/数据引用分类及 `ARM64` `ADRP+ADD` 配对）、`read_memory`、`convert_address` 及 `decompile_function` 降级测试。
-4. **家族先例参考 (Prior Art)**：
-   - 对齐同家族 Python + `uv` MCP 仓库（如 `mcp-server-traffic-inspector`、`mcp-server-tcp`）的 CLI `--doctor` 探针测试与 FastMCP 工具契约测试风格。
+   - **主接缝（MCP Tool 顶层函数边界 & CLI `main(argv)` 边界）**：所有核心逆向能力直接通过调用 21 个 MCP Tool 函数与 CLI 入口函数进行端到端验证。
+   - **动态合成真实二进制夹具 (`Synthetic Binary Fixtures`)**：在测试夹具中动态构造最小合法的 64 位 **PE64**（含 Rich Header）、**ELF64** 与 **Mach-O**（含 Entitlements 与代码签名）二进制样本文件，零外部样本文件依赖。
+   - **外部子进程轻量替身接缝 (`Subprocess Seam`)**：在验证外部工具（`radare2` / `floss` / `yara`）的超时熔断与未安装降级时使用受控隔离，确保测试套件在任意受限环境中 100% 稳定通过（全量 113 项单测全绿）。
 
 ---
 
 ## Out of Scope (范围外边界)
 
 1. **动态调试与真实恶意代码沙箱执行**：本服务严格定位于**纯静态二进制逆向分析**（Static Analysis），绝不在宿主机上直接运行、加载或动态调试（如 `ptrace`、`WinDbg`、Frida Hook）目标二进制样本，杜绝恶意样本在分析过程中触发本地感染。
-2. **二进制文件补丁修改与回写 (Binary Patching)**：所有 MCP Tools 均为只读分析操作，不支持修改二进制指令或重写磁盘上的目标文件。
+2. **物理磁盘二进制文件篡改与写回**：严格坚守数字取证保真红线，物理磁盘上的目标样本始终保持 100% 只读打开；所有打补丁操作（`patch_memory`）纯粹在会话内存写时复制（COW）层虚拟生效，严禁将修改写回物理磁盘。
 3. **重型商业反编译器绑定**：不绑定 IDA Pro（`idalib`）或需要商业许可证的闭源软件，也不强制内置数百 MB 的 Ghidra Headless Java 运行时。
-4. **自动化脱壳器 (Automated Unpacker)**：仅提供高熵节区检测、加壳指纹提示（`packing_hint`）与 Overlay 识别，不内置针对 VMProtect / Themida 等复杂虚拟化壳的动态脱壳功能。
+4. **自动化脱壳器 (Automated Unpacker)**：仅提供全局与局部滑动窗口高熵节区检测、加壳指纹提示（`packing_hint`）与 Overlay 识别，不内置针对 VMProtect / Themida 等复杂虚拟化壳的动态脱壳功能。
 
 ---
 

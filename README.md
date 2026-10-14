@@ -7,42 +7,52 @@
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-Apache%202.0-green.svg)](./LICENSE)
 
-**`mcp-server-reverse`**（PyPI 包名：**`atengk-mcp-server-reverse`**）是一款专为 AI Agent / LLM 打造的跨平台**二进制静态逆向分析与数字取证（DFIR）MCP Server**。
+**`mcp-server-reverse`**（PyPI 包名：**`atengk-mcp-server-reverse`**）是一款专为 AI Agent / LLM 打造的跨平台**下一代二进制静态逆向分析与纵深数字取证（DFIR）MCP Server**。
 
-采用**“纯 Python 静态分析内核（`lief` + `capstone` + `pefile`）+ 按需外部 CLI 增强适配层（`radare2` / `objdump` / `floss`）”**混合分层架构：无需预装任何庞大的商业逆向软件，开箱即可对 **PE（`.exe`/`.dll`/`.sys`）、ELF（Linux/Android `.so`）、Mach-O（macOS/iOS，含 Fat Binary 多架构切片）** 执行全景画像、纵深取证元数据提取、香农熵脱壳研判、导入/导出/符号检索（含 PE64 `.pdata` 无符号函数恢复）、IOC 字符串提取、密码学常量扫描、多架构反汇编及 `RIP/PC-relative` 交叉引用（Xref）定位；当宿主机或容器环境存在 `radare2` / `floss` 时，自动解锁类 C 伪代码反编译与混淆栈字符串解码。
+采用**“纯 Python 静态分析内核（`lief` + `capstone` + `pefile`）+ 按需外部 CLI 增强适配层（`radare2` / `objdump` / `floss` / `yara`）”**混合分层架构：无需预装庞大的商业逆向套件，开箱即可对 **PE（`.exe`/`.dll`/`.sys`）、ELF（Linux/Android `.so`）、Mach-O（macOS/iOS，含 Fat Binary 多架构切片）** 执行全景静态画像、函数控制流图（CFG）抽取、写时复制（COW）内存虚拟打补丁、滑动窗口局部高熵块探测、全平台漏洞缓解加固审计、YARA 规则匹配、PE Rich Header 编译器版本追溯、纯 Python SSDEEP 模糊哈希计算、Mach-O Entitlements 清单提取、PE64 `.pdata` 无符号函数恢复以及 `RIP/PC-relative` 交叉引用（Xref）定位；当宿主机或容器环境存在外部工具时，自动解锁伪代码反编译与混淆栈字符串解码。
 
 ---
 
 ## ✨ 核心特性
 
-- **100% 纯 Python 核心兜底**：基于 `lief`、`capstone`、`pefile` 构建跨格式解析底座，零外部 CLI 依赖即可运行 14 个核心逆向分析与数字取证工具。
-- **纵深取证画像与无符号函数恢复**：自动提取 TLS 回调、PDB 调试路径、Rich Header 哈希、文件尾部 Overlay 附加数据及代码签名状态；针对去除符号表（Stripped）的 64 位 PE 文件，自动解析 `.pdata` 异常目录恢复内部函数起止边界（`sub_<va>`）。
-- **指令级 `RIP/PC-relative` 交叉引用引擎**：突破常规字节匹配局限，自动扫描可执行节区中的 `x86_64` `RIP-relative`、`ARM64` 4 指令滑动窗口 `ADRP + ADD/LDR`、直接 `call`/`jmp` 及数据段全局指针，精准定位字符串与函数被引用位置。
-- **四级跨平台外部工具寻址与区分式降级**：按 `CLI 参数 > MCP_REVERSE_* 环境变量 > 系统 PATH > 操作系统常见安装目录` 自动探测 `radare2`/`rizin`、`llvm-objdump`/`objdump` 与 `floss`；未安装时返回结构化降级指引或自动软回退。
-- **LRU 会话池与上下文防爆**：以目标文件内容哈希（Fat Binary 采用文件哈希与架构复合摘要）前 12 位作为 `session_id` 驻留内存缓存（默认最多 `8` 个会话），所有列表工具强制分页（`offset`/`limit`）与紧凑单行输出。
-- **纵深沙箱防御与多协议传输**：支持 `--allowed-dir` 目录白名单防穿越、`--max-file-size-mb` 大文件熔断、`stdio` / `sse` / `streamable-http` 传输模式，以及 `--check` / `--doctor` 环境自检探针。
+- **100% 纯 Python 核心底座**：基于 `lief`、`capstone`、`pefile` 构建跨格式解析内核，零外部 CLI 依赖即可原生运行 19 个核心逆向分析与数字取证工具。
+- **函数控制流图 (CFG) 与 Mermaid 可视化**：自动切分单入口单出口基本块（`BasicBlock`），计算条件跳转、循环回跳边与圈复杂度，并直接输出紧凑规范的 Mermaid `flowchart TD` 流程图文本供 Agent 直观阅读与拓扑推演。
+- **写时复制 (COW) 内存虚拟打补丁与只读保真机制**：物理磁盘样本保持 100% 只读保真；在分析会话内支持原子内存字节修改、分支反转 What-If 假设推演、即时反汇编与 CFG 动态重绘，并支持随时查看与一键原子回滚。
+- **全平台利用缓解机制跨架构画像与安全评分**：深度审计 Windows（DEP/ASLR/SafeSEH/CFG/CET）、Linux（NX/PIE/RELRO/Canary/FORTIFY）与 macOS（PIE/代码签名/Hardened Runtime），输出加权安全评分（0~100）与利用难度量化评级。
+- **节区滑动窗口局部异常高熵块细粒度探测**：突破全局香农熵容易被大节区稀释的瓶颈，以 2KB~4KB 滑动窗口敏锐捕捉代码段或只读数据段中偷渡的微型加密 Shellcode 与加壳 Payload。
+- **纵深数字取证同源指纹增强**：自动解析 PE Rich Header 提取 Visual Studio 编译器工具链组件（ProdID/BuildNumber/引用计数）；基于纯 Python 滚动哈希计算标准 SSDEEP 模糊哈希（CTPH）；深度反序列化 Mach-O 代码签名 SuperBlob 提取 Entitlements XML 权限清单。
+- **独立 YARA 规则匹配与优雅降级**：支持文本规则即时编译与规则文件路径加载，自动映射命中特征字符串的文件物理偏移与虚拟内存地址（VA）；未安装 `yara-python` 时提供结构化引导与平滑降级。
+- **指令级 `RIP/PC-relative` 交叉引用引擎**：自动扫描 `x86_64` `RIP-relative`、`ARM64` 4 指令滑动窗口 `ADRP + ADD/LDR`、直接分支及数据段全局指针，首次查询后台线程惰性构建倒排索引并缓存，同会话后续查询毫秒级 $O(1)$ 命中。
+- **四级跨平台外部工具寻址**：按 `CLI 参数 > MCP_REVERSE_* 环境变量 > 系统 PATH > 操作系统常见安装目录` 自动探测 `radare2`/`rizin`、`llvm-objdump`/`objdump` 与 `floss`，提供结构化降级指引。
+- **LRU 会话池与上下文防爆**：以文件内容哈希（Fat Binary 结合架构生成复合摘要）前 12 位作为 `session_id` 驻留内存（默认最多 `8` 个会话），所有检索工具强制分页与紧凑单行格式化输出。
 
 ---
 
-## 🧰 15 个正交 MCP Tools 矩阵
+## 🧰 21 个正交 MCP Tools 矩阵
 
-| 分组 | Tool 名称 | 核心职责说明 |
+| 业务分组 | Tool 名称 | 核心职责与关键能力说明 |
 | :--- | :--- | :--- |
-| **1. 会话与全景画像**<br>(`Triage & Session`) | `open_binary` | 校验安全沙箱并加载二进制文件（支持 `target_arch` 选择 Fat Mach-O 切片）至 LRU 缓存，返回哈希（含 Imphash）、安全防护标志（PIE/NX/Canary）、分诊概览及纵深取证元数据（TLS 回调、PDB/Rich Header、Overlay、代码签名） |
-| | `list_sessions` | 列出当前内存中驻留的所有二进制分析会话元数据摘要 |
-| | `close_session` | 显式释放指定 `session_id` 或清空全部缓存会话以回收内存 |
-| **2. 结构与符号检视**<br>(`Structure & Symbols`) | `get_sections` | 获取所有节区/段分布、读写执行权限、香农熵（`0.0~8.0`）及高熵加壳预警（`>= 7.2`） |
+| **1. 会话与全景画像**<br>(`Triage & Session`) | `open_binary` | 校验沙箱并加载二进制至 LRU 缓存，返回哈希（含 Imphash/SSDEEP）、防护标志、高熵加壳预警及深度取证画像（TLS 回调、PDB/Rich Header 编译器指纹、Overlay 附加数据、代码签名与 Mach-O Entitlements 清单） |
+| | `list_sessions` | 列出当前内存中驻留的所有二进制分析会话元数据摘要与时间戳 |
+| | `close_session` | 显式释放指定 `session_id` 或一键清空全部缓存会话以回收系统内存 |
+| **2. 结构与符号检视**<br>(`Structure & Symbols`) | `get_sections` | 获取所有节区/段分布、权限、全局香农熵（`0.0~8.0`），可选开启 `detect_local_entropy` 滑动窗口精准探测局部高熵隐蔽块 |
 | | `get_imports` | 分页检索导入表，支持按库名、函数名正则与 8 类敏感行为标签（`crypto`、`process_injection`、`anti_debug` 等）过滤 |
 | | `get_exports` | 分页检索导出函数表、序号（Ordinal）、虚拟地址与转发器（Forwarder） |
-| | `get_symbols` | 分页检索静态/动态符号表（支持类型过滤与 C++ Demangle）；针对 64 位 PE 自动解析 `.pdata` 异常目录恢复无符号内部函数 `sub_<va>`（标注精确字节长度与 `exception_frame` 类型） |
-| **3. 字符串与特征扫描**<br>(`Strings & Signatures`) | `search_strings` | 提取 ASCII / UTF-16LE 字符串（可选开启 `use_floss` 解码栈字符串，未安装时自动软降级），内置 7 类威胁情报 IOC 自动分类（`url`、`ipv4`、`registry`、`suspicious_cmd` 等）与正则过滤 |
-| | `search_bytes_and_constants` | 支持类 IDA 十六进制通配符搜索（如 `"48 89 5C 24 ? 57"`）及内置密码学魔数常量（AES S-Box/Rcon、SHA-256/SHA-1/MD5 IV、CRC32、DES S-Box）扫描 |
-| **4. 反汇编、交叉引用与内存**<br>(`Disasm, Xrefs & Memory`) | `disassemble` | 多架构反汇编指定十六进制虚拟地址或符号名（支持 `stop_at_ret` 在函数返回指令处停止），自动内联标注 `RIP/PC-relative` 字符串字面量与符号注释 |
-| | `find_xrefs` | 惰性构建会话级交叉引用索引，检索指向目标虚拟地址或符号的全部代码与数据引用（`call`/`branch`/`rip_relative`/`pc_relative`/`data_pointer`） |
+| | `get_symbols` | 分页检索静态/动态符号表；针对 64 位 PE 自动解析 `.pdata` 异常目录恢复无符号内部函数 `sub_<va>`（标注字节长度与 `exception_frame` 类型） |
+| **3. 字符串与特征扫描**<br>(`Strings & Signatures`) | `search_strings` | 提取 ASCII / UTF-16LE 字符串（可选 `use_floss` 软降级解码栈字符串），内置 7 类威胁情报 IOC 自动分类与正则过滤 |
+| | `search_bytes_and_constants` | 支持类 IDA 十六进制通配符搜索（如 `"48 89 5C 24 ? 57"`）及内置密码学魔数常量（AES S-Box/Rcon、SHA/MD5 IV、CRC32、DES）扫描 |
+| | `scan_yara` | 传入规则文本或规则文件对会话内存或文件执行 YARA 匹配，返回命中规则元数据与特征字符串的文件偏移及虚拟内存地址（VA） |
+| **4. 反汇编、交叉引用与控制流**<br>(`Disasm, Xrefs & CFG`) | `disassemble` | 多架构反汇编指定虚拟地址或符号名（支持 `stop_at_ret` 截断），自动内联标注 `RIP/PC-relative` 字符串字面量与符号注释 |
+| | `find_xrefs` | 惰性构建会话级倒排索引，检索指向目标虚拟地址或符号的全部代码与数据交叉引用（`call`/`branch`/`rip_relative`/`pc_relative`/`data_pointer`） |
 | | `read_memory` | 按 VA、RVA 或文件物理偏移读取原始字节（单次上限 `1024` 字节），输出连续十六进制与标准 16 字节宽度 Hexdump + ASCII 对照视图 |
 | | `convert_address` | 在虚拟地址（VA）、相对虚拟地址（RVA）与文件物理偏移（Offset）之间双向精确换算并定位所属节区与权限 |
-| **5. 外部增强与能力自检**<br>(`Enhance & Capabilities`) | `decompile_function` | 受控调用本地 `radare2`/`rizin` 生成目标函数的类 C 伪代码与行列表；未安装时返回 `EXTERNAL_TOOL_UNAVAILABLE` 结构化安装与降级指引 |
-| | `get_capabilities` | 返回核心引擎版本、沙箱边界配置及四级寻址器探测到的外部 CLI 工具可用状态 |
+| | `analyze_cfg` | 分析函数单入口单出口基本块（`BasicBlock`）、分支跳转关系与圈复杂度，并直接输出 Mermaid `flowchart TD` 控制流流程图文本 |
+| **5. 内存虚拟补丁套件**<br>(`Virtual Patching`) | `patch_memory` | 在写时复制（COW）虚拟层应用十六进制内存补丁，物理文件 100% 只读保真，即时影响后续反汇编与控制流分析 |
+| | `list_patches` | 清晰列出当前会话中所有已激活的内存虚拟补丁记录、目标地址与原始/修改字节对比 |
+| | `revert_patch` | 指定 `patch_id` 单项撤销补丁，或缺省一键回滚当前会话全部补丁恢复初始净室内存镜像 |
+| **6. 安全加固与外部增强**<br>(`Mitigations & Capabilities`) | `audit_mitigations` | 系统化审计目标二进制的跨平台漏洞利用缓解措施，输出 0~100 安全评分与利用难度评级（Low/Medium/High/Extreme） |
+| | `decompile_function` | 受控异步调用本地 `radare2`/`rizin` 生成目标函数的类 C 伪代码；未安装时返回结构化安装指引与软降级建议 |
+| | `get_capabilities` | 返回核心引擎版本、安全沙箱边界配置及四级寻址器探测到的外部 CLI 工具可用状态 |
 
 ---
 
@@ -96,28 +106,53 @@ docker run -d \
 
 ## 💡 常用使用提示词 (Prompt Examples)
 
-挂载本 MCP 服务后，可直接复制以下提示词驱动 AI 执行专业逆向分析与数字取证：
+挂载本 MCP 服务后，可直接复制以下提示词驱动 AI 执行专业逆向分析、漏洞研判与数字取证：
 
-### 场景 1：二进制全景画像与恶意样本初筛 (Triage & DFIR)
+### 场景 1：二进制全景画像与深度取证初筛 (Triage & DFIR)
 > “请对 `D:/samples/suspicious.exe` 执行静态逆向初筛：
-> 1. 获取它的 MD5/SHA256/Imphash、编译时间戳、PDB 路径、TLS 回调、代码签名以及是否存在高熵加壳节区或尾部 Overlay 附加数据；
+> 1. 获取它的 MD5/SHA256/Imphash、SSDEEP 模糊哈希、编译时间戳、PDB 路径、PE Rich Header 工具链编译器指纹、TLS 回调以及是否存在尾部 Overlay 附加数据；
 > 2. 列出所有命中 `process_injection`、`anti_debug`、`network` 与 `execution` 类别的敏感导入 API；
 > 3. 提取所有归类为 `url`、`ipv4`、`registry` 和 `suspicious_cmd` 的 IOC 字符串，给出综合威胁研判结论。”
 
-### 场景 2：关键字符串交叉引用追踪与控制流还原 (String Xrefs -> Disassembly)
+### 场景 2：函数控制流图抽取与 Mermaid 流程图可视化 (CFG Analysis)
+> “目标函数 `sub_140001000` 包含复杂的条件跳转与混淆分支：
+> 1. 请调用 `analyze_cfg` 对该函数进行控制流分析，提取基本块边界、分支跳转走向与圈复杂度；
+> 2. 直接渲染输出该函数的 Mermaid `flowchart TD` 流程图，指出哪一条分支是校验失败跳转，哪一条分支通向关键解密载荷。”
+
+### 场景 3：写时复制 (COW) 内存虚拟补丁与分支反转 What-If 推演 (Virtual Patching)
+> “在当前分析会话中验证绕过反调试的可能性：
+> 1. 对 `0x140001050` 处的条件跳转指令（`74 12` 即 `JZ`）调用 `patch_memory`，虚拟替换为 `75 12`（`JNZ`）或 `90 90`（`NOP`）；
+> 2. 重新调用 `disassemble` 和 `analyze_cfg`，观察补丁应用后指令流与控制流图的实时演变，确认是否已绕过校验；
+> 3. 完成验证后调用 `list_patches` 核对补丁记录，并调用 `revert_patch` 撤销补丁恢复原始净室镜像（全程物理样本保持零磁盘改动）。”
+
+### 场景 4：全平台漏洞缓解机制加固审计与评分 (Mitigations Audit)
+> “请针对 `D:/samples/target_service.elf` 执行漏洞利用防护审计：
+> 1. 调用 `audit_mitigations` 检查 NX、PIE、RELRO、Stack Canary 与 FORTIFY 编译项开启状态；
+> 2. 评估该二进制的加固安全评分与利用难度评级（Low/Medium/High/Extreme），并针对未开启的防护项提出具体加固建议。”
+
+### 场景 5：节区滑动窗口局部异常高熵块隐蔽探测 (Local Entropy Detection)
+> “样本 `.text` 代码段整体香农熵仅为 5.8，疑似内部偷渡了微型加壳代码：
+> 1. 调用 `get_sections` 并开启 `detect_local_entropy=True`（窗口 2048 字节、步长 1024 字节）；
+> 2. 检查返回的 `local_high_entropy_blocks` 列表，定位局部熵值超过 7.2 的连续异常区间起始偏移与虚拟地址；
+> 3. 使用 `read_memory` 检视该高熵区间的 Hexdump 数据，判断其为加密 Shellcode 还是压缩配置。”
+
+### 场景 6：工业级 YARA 特征规则即时扫描 (YARA Scanning)
+> “安全团队下发了针对某 APT 恶意木马家族的 YARA 规则，请协助在会话中排查：
+> 1. 调用 `scan_yara` 并传入规则文本字符串，扫描当前二进制会话的内存镜像；
+> 2. 若命中规则，列出所有匹配的特征字符串标识、物理文件偏移与虚拟内存地址（VA）；
+> 3. 使用 `find_xrefs` 追踪是哪些函数代码引用了命中的恶意特征字符串。”
+
+### 场景 7：关键字符串交叉引用追踪与控制流还原 (String Xrefs -> Disassembly)
 > “在当前分析会话中：
 > 1. 搜索包含 `http`、`token` 或 `Error` 关键字的字符串并记录其虚拟地址；
 > 2. 使用 `find_xrefs` 查找是哪些代码指令引用了这些字符串；
-> 3. 对发起引用的函数起始地址（或前后上下文）执行 `disassemble`，结合内联注释还原该函数的核心调用逻辑（若本机已安装 radare2，请同时调用 `decompile_function` 输出伪代码对照）。”
+> 3. 对发起引用的函数起始地址执行 `disassemble`，结合内联注释还原该函数的核心调用逻辑（若本机已安装 radare2，请同时调用 `decompile_function` 输出伪代码对照）。”
 
-### 场景 3：去符号 (Stripped) 64 位 PE 内部函数恢复与密码学算法识别
+### 场景 8：去符号 (Stripped) 64 位 PE 内部函数恢复与密码学算法识别
 > “目标文件 `D:/samples/stripped_payload.dll` 已被剥离符号表，请协助定位其加密逻辑：
 > 1. 调用 `search_bytes_and_constants` 并开启 `scan_crypto=True`，检查二进制中是否包含 AES、SHA-256、MD5 或 CRC32 的特征魔数常量表；
 > 2. 使用 `find_xrefs` 定位引用了该密码学常量表的代码地址；
-> 3. 调用 `get_symbols`（设置 `symbol_type="exception_frame"`）查看通过 `.pdata` 异常目录恢复出的 `sub_<va>` 内部函数列表，定位所属函数并反汇编分析其参数传递与加密流程。”
-
-### 场景 4：特征码匹配（类 IDA 通配符搜索）与内存数据检视
-> “请在目标二进制 `.text` 节区中使用 `search_bytes_and_constants` 搜索类 IDA 十六进制特征序列 `48 8D 0D ?? ?? ?? ?? E8`，对命中的虚拟地址执行 `disassemble` 查看具体指令，并使用 `read_memory` 检视其引用的目标数据区 Hexdump 内容。”
+> 3. 调用 `get_symbols(symbol_type="exception_frame")` 查看通过 `.pdata` 异常目录恢复出的 `sub_<va>` 内部函数列表，定位所属函数并反汇编分析其加密流程。”
 
 ---
 
@@ -129,7 +164,7 @@ docker run -d \
 | :--- | :--- | :--- | :--- |
 | `-h, --help` | - | - | 输出完整中文帮助说明与示例并退出 |
 | `-v, --version` | - | - | 输出版本号与核心引擎版本信息并退出 |
-| `--check` / `--doctor` | - | `False` | 执行运行环境与四级外部工具寻址自检探针 |
+| `--check` / `--doctor` | - | `False` | 执行运行环境与四级外部工具寻址分级自检探针 |
 | `-t, --transport` | `MCP_REVERSE_TRANSPORT` | `stdio` | 传输协议：`stdio`、`sse`、`streamable-http` |
 | `--host` | `MCP_REVERSE_HOST` | `127.0.0.1` | `sse` / `streamable-http` 监听地址 |
 | `-p, --port` | `MCP_REVERSE_PORT` | `8000` | `sse` / `streamable-http` 监听端口 |
@@ -144,34 +179,23 @@ docker run -d \
 
 ---
 
-## 🛠️ 本地开发与工程规范
+## 🛠️ 本地开发与工程验证
 
 ```bash
 # 1. 创建 Python 3.12 虚拟环境并同步依赖
 uv venv --python 3.12
-uv sync --all-extras --dev
+uv sync
 
-# 2. 激活本地 Conventional Commits 提交守门钩子
-git config core.hooksPath .githooks
+# 2. 运行完整自动化测试套件 (113 个测试项全量通过)
+uv run pytest
 
-# 3. 运行静态检查与单元测试
-uv run ruff check .
-uv run ruff format --check .
-uv run pytest --cov=mcp_server_reverse
-
-# 4. 规范化提交与发版演练
-bash scripts/commit.sh
-bash scripts/release.sh --dry-run
+# 3. 运行代码规范与格式静态扫描
+uv run ruff check src tests
+uv run ruff format --check src tests
 ```
-
-详细贡献流程、CI/CD 机制与安全披露策略请参阅：
-- [领域词汇表 (CONTEXT.md)](./CONTEXT.md)
-- [贡献指南 (CONTRIBUTING.md)](./CONTRIBUTING.md)
-- [安全策略 (SECURITY.md)](./SECURITY.md)
-- [行为准则 (CODE_OF_CONDUCT.md)](./CODE_OF_CONDUCT.md)
 
 ---
 
-## 📄 开源协议
+## 📄 开源许可证
 
 本项目基于 [Apache License 2.0](./LICENSE) 协议开源。
