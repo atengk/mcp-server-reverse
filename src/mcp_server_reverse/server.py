@@ -23,6 +23,7 @@ from mcp_server_reverse.tools.disasm import (
     find_xrefs_impl,
     read_memory_impl,
 )
+from mcp_server_reverse.tools.mitigations import audit_mitigations_impl
 from mcp_server_reverse.tools.patch import (
     list_patches_impl,
     patch_memory_impl,
@@ -558,6 +559,28 @@ def create_mcp_server(config: ServerConfig) -> MCPServer:
             session_id=session_id,
             target=target,
             max_blocks=max_blocks,
+            session_store=session_store,
+        )
+
+    @server.tool(
+        name="audit_mitigations",
+        description=(
+            "全平台 (Windows PE / Linux ELF / macOS Mach-O) 漏洞缓解机制加固审计；"
+            "深度检测 ASLR/PIE、DEP/NX、SafeSEH、RELRO、Stack Canary、Control Flow Guard (CFG)、"
+            "CET 影子栈、FORTIFY_SOURCE 与苹果代码签名/Hardened Runtime，"
+            "计算 0~100 加权安全评分并给出利用难度评级与针对性加固修复建议"
+        ),
+    )
+    def audit_mitigations(
+        session_id: str,
+    ) -> dict[str, Any]:
+        """审计目标二进制全平台漏洞缓解机制并计算加权安全评分
+
+        @param session_id 目标活跃分析会话标识
+        @return dict[str, Any] 漏洞缓解机制加固审计响应字典
+        """
+        return audit_mitigations_impl(
+            session_id=session_id,
             session_store=session_store,
         )
 

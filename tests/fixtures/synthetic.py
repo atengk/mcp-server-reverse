@@ -467,3 +467,35 @@ def build_synthetic_elf64(output_path: Path) -> Path:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_bytes(full_elf)
     return output_path
+
+
+def build_synthetic_macho64(output_path: Path) -> Path:
+    """动态合成最小合法的 64 位 ARM64 Mach-O 可执行文件并落盘
+
+    包含：
+    - Mach-O 64-bit Header (MH_MAGIC_64, ARM64, MH_EXECUTE, MH_PIE)
+    - 基础指令填充与字符串常量
+
+    @param output_path 目标输出物理文件路径
+    @return Path 成功落盘的文件路径
+    """
+    # 1. Mach-O 64-bit Header (32 字节)
+    # flags: MH_PIE (0x200000) | MH_DYLDLINK (0x4) | MH_TWOLEVEL (0x80) | 1
+    flags = 0x00200085
+    macho_hdr = struct.pack(
+        "<IIIIIIII",
+        0xFEEDFACF,  # magic
+        0x0100000C,  # cputype (ARM64)
+        0,  # cpusubtype
+        2,  # filetype (MH_EXECUTE)
+        0,  # ncmds
+        0,  # sizeofcmds
+        flags,
+        0,  # reserved
+    )
+
+    padding = b"\x00" * 224
+    payload = macho_hdr + padding
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_bytes(payload)
+    return output_path

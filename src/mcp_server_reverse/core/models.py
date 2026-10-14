@@ -390,6 +390,54 @@ class BasicBlock:
         return data
 
 
+class ExploitDifficulty(StrEnum):
+    """二进制漏洞利用难度评级枚举"""
+
+    LOW = "Low"
+    MEDIUM = "Medium"
+    HIGH = "High"
+    EXTREME = "Extreme"
+
+
+class RelroStatus(StrEnum):
+    """Linux ELF 重定位只读 (RELRO) 保护级别枚举"""
+
+    FULL = "Full"
+    PARTIAL = "Partial"
+    NONE = "None"
+
+
+@dataclass
+class MitigationProfile:
+    """全平台二进制漏洞缓解机制加固画像
+
+    @author Ateng
+    @since 2026-10-14
+    @param format 目标二进制文件格式 ('PE', 'ELF', 'Mach-O')
+    @param arch 架构名称 (x86_64, arm64, etc.)
+    @param score 综合安全加固评分 (0 ~ 100)
+    @param exploit_difficulty 漏洞利用难度评级 ('Low', 'Medium', 'High', 'Extreme')
+    @param mitigations 平台对应的缓解机制详细开关字典
+    @param summary 缓解机制审计结论总结
+    @param recommendations 针对未启用防御措施的加固改进建议列表
+    """
+
+    format: str
+    arch: str
+    score: int
+    exploit_difficulty: str
+    mitigations: dict[str, Any]
+    summary: str
+    recommendations: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        """将加固画像序列化为字典对象
+
+        @return dict[str, Any] 序列化字典对象
+        """
+        return asdict(self)
+
+
 @dataclass
 class ResponseEnvelope:
     """所有 MCP Tools 统一标准响应信封
