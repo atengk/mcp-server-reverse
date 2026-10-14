@@ -125,18 +125,30 @@ def create_mcp_server(config: ServerConfig) -> MCPServer:
         name="get_sections",
         description=(
             "枚举指定二进制分析会话的全量节区/段分布画像，输出虚拟地址、虚拟尺寸、"
-            "文件物理偏移与大小、R/W/X 访问权限、香农熵 (0.0~8.0) 以及高熵加壳标记 (>= 7.2)"
+            "文件物理偏移与大小、R/W/X 访问权限、香农熵 (0.0~8.0)、高熵加壳标记 (>= 7.2) "
+            "以及通过滑动窗口探测的局部异常高熵块列表"
         ),
     )
-    def get_sections(session_id: str) -> dict[str, Any]:
-        """提取指定二进制会话的全量节区分布画像
+    def get_sections(
+        session_id: str,
+        detect_local_entropy: bool = True,
+        window_size: int = 2048,
+        step: int = 1024,
+    ) -> dict[str, Any]:
+        """提取指定二进制会话的全量节区分布画像与局部高熵块
 
         @param session_id 目标活跃分析会话标识
+        @param detect_local_entropy 是否启用基于滑动窗口的细粒度局部高熵块探测 (缺省 True)
+        @param window_size 滑动窗口字节尺寸 (缺省 2048)
+        @param step 滑动步长 (缺省 1024)
         @return dict[str, Any] 节区画像响应字典
         """
         return get_sections_impl(
             session_id=session_id,
             session_store=session_store,
+            detect_local_entropy=detect_local_entropy,
+            window_size=window_size,
+            step=step,
         )
 
     @server.tool(

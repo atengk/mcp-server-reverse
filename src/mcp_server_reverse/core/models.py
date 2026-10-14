@@ -77,6 +77,31 @@ class ExternalCapability:
 
 
 @dataclass
+class LocalEntropyBlock:
+    """节区内滑动窗口探测到的局部异常高熵数据块
+
+    @author Ateng
+    @since 2026-10-14
+    @param offset 块在文件内的物理绝对起始偏移量
+    @param virtual_address 块在内存中的虚拟地址 (十六进制字符串, 若不可用则为 None)
+    @param size 连续高熵数据块的字节尺寸
+    @param max_entropy 块内滑动窗口测得的最高香农熵值 (0.0 ~ 8.0)
+    """
+
+    offset: int
+    virtual_address: str | None
+    size: int
+    max_entropy: float
+
+    def to_dict(self) -> dict[str, Any]:
+        """将局部高熵块序列化为字典对象
+
+        @return dict[str, Any] 序列化字典对象
+        """
+        return asdict(self)
+
+
+@dataclass
 class SectionProfile:
     """节区与段静态分布元数据画像
 
@@ -88,6 +113,7 @@ class SectionProfile:
     @param permissions 访问权限字符串 (如 "r-x", "rw-", "r--")
     @param entropy 香农熵数值 (0.0 ~ 8.0)
     @param is_high_entropy 是否为疑似加壳或加密的高熵节区 (>= 7.2)
+    @param local_high_entropy_blocks 滑动窗口细粒度探测到的局部高熵异常块列表
     """
 
     name: str
@@ -98,13 +124,18 @@ class SectionProfile:
     permissions: str
     entropy: float
     is_high_entropy: bool
+    local_high_entropy_blocks: list[LocalEntropyBlock] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         """将节区画像序列化为字典对象
 
-        @return dict[str, Any] 序列化字典字典
+        @return dict[str, Any] 序列化字典对象
         """
-        return asdict(self)
+        data = asdict(self)
+        data["local_high_entropy_blocks"] = [
+            b if isinstance(b, dict) else asdict(b) for b in self.local_high_entropy_blocks
+        ]
+        return data
 
 
 @dataclass

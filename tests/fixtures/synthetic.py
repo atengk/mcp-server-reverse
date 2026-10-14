@@ -408,6 +408,72 @@ def build_synthetic_pe64(output_path: Path) -> Path:
     return output_path
 
 
+def build_synthetic_pe64_large_text(output_path: Path) -> Path:
+    """动态合成包含 8KB .text 大节区的 64 位 PE64 (.exe) 文件
+
+    用于节区滑动窗口局部高熵块细粒度探测等专项测试。
+    .text 节区尺寸 0x2000 (8192 字节)，初始填充低熵指令与 NOP 序列，整体平均熵值 < 3.0。
+
+    @param output_path 目标输出物理文件路径
+    @return Path 成功落盘的文件路径
+    """
+    # 1. DOS Header (0x80 字节)
+    dos_header = bytearray(0x80)
+    dos_header[0:2] = b"MZ"
+    struct.pack_into("<I", dos_header, 0x3C, 0x80)  # e_lfanew = 0x80
+
+    # 2. PE 签名与 File Header (24 字节)
+    pe_sig = b"PE\x00\x00"
+    file_header = struct.pack("<HHIIIHH", 0x8664, 2, 0, 0, 0, 240, 0x0022)
+
+    # 3. Optional Header (PE32+, 240 字节)
+    opt_header = bytearray(240)
+    struct.pack_into("<H", opt_header, 0, 0x020B)  # Magic = PE32+ (64-bit)
+    struct.pack_into("<I", opt_header, 16, 0x1000)  # AddressOfEntryPoint (.text 起始)
+    struct.pack_into("<Q", opt_header, 24, 0x140000000)  # ImageBase
+    struct.pack_into("<I", opt_header, 32, 0x1000)  # SectionAlignment
+    struct.pack_into("<I", opt_header, 36, 0x200)  # FileAlignment
+    struct.pack_into("<I", opt_header, 56, 0x5000)  # SizeOfImage
+    struct.pack_into("<I", opt_header, 60, 0x200)  # SizeOfHeaders
+    struct.pack_into("<H", opt_header, 68, 2)  # Subsystem = WINDOWS_GUI
+    struct.pack_into("<H", opt_header, 70, 0x0140)  # DYNAMIC_BASE | NX_COMPAT
+    struct.pack_into("<I", opt_header, 108, 16)  # NumberOfRvaAndSizes
+
+    # 4. Section Headers (每个 40 字节)
+    # 4.1 .text 节区 (VA 0x1000, VirtualSize 0x2000, Raw 0x2000, Offset 0x200)
+    sec_text = bytearray(40)
+    sec_text[0:5] = b".text"
+    struct.pack_into("<I", sec_text, 8, 0x2000)
+    struct.pack_into("<I", sec_text, 12, 0x1000)
+    struct.pack_into("<I", sec_text, 16, 0x2000)
+    struct.pack_into("<I", sec_text, 20, 0x200)
+    struct.pack_into("<I", sec_text, 36, 0x60000020)  # CODE | EXECUTE | READ
+
+    # 4.2 .rdata 节区 (VA 0x3000, VirtualSize 0x800, Raw 0x800, Offset 0x2200)
+    sec_rdata = bytearray(40)
+    sec_rdata[0:6] = b".rdata"
+    struct.pack_into("<I", sec_rdata, 8, 0x800)
+    struct.pack_into("<I", sec_rdata, 12, 0x3000)
+    struct.pack_into("<I", sec_rdata, 16, 0x800)
+    struct.pack_into("<I", sec_rdata, 20, 0x2200)
+    struct.pack_into("<I", sec_rdata, 36, 0x40000040)  # INITIALIZED_DATA | READ
+
+    headers = bytes(dos_header + pe_sig + file_header + opt_header + sec_text + sec_rdata)
+    headers += b"\x00" * (0x200 - len(headers))
+
+    # 5. .text 机器指令与低熵 NOP 序列 (0x2000 字节)
+    code_bytes = b"\x48\x8d\x0d\x49\x12\x00\x00\xe8\x00\x00\x00\x00\x31\xc0\xc3\xcc"
+    text_section = code_bytes + b"\x90" * (0x2000 - len(code_bytes))
+
+    # 6. .rdata 数据载荷 (0x800 字节)
+    rdata_buf = b"\x00" * 0x800
+
+    full_payload = headers + text_section + rdata_buf
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_bytes(full_payload)
+    return output_path
+
+
 def build_synthetic_elf64(output_path: Path) -> Path:
     """动态合成最小合法的 64 位 ELF64 可执行文件并落盘
 

@@ -28,18 +28,29 @@ from mcp_server_reverse.tools.session import get_session_or_error
 def get_sections_impl(
     session_id: str,
     session_store: SessionStore,
+    detect_local_entropy: bool = True,
+    window_size: int = 2048,
+    step: int = 1024,
 ) -> dict[str, Any]:
     """get_sections 核心业务实现
 
     @param session_id 目标会话唯一标识
     @param session_store 会话池实例
+    @param detect_local_entropy 是否启用基于滑动窗口的细粒度局部高熵块探测 (缺省 True)
+    @param window_size 滑动窗口字节尺寸 (缺省 2048)
+    @param step 滑动步长 (缺省 1024)
     @return dict[str, Any] 统一响应信封字典
     """
     session, err_resp = get_session_or_error(session_id, session_store)
     if err_resp is not None or session is None:
         return err_resp or {}
 
-    sections = extract_sections(session)
+    sections = extract_sections(
+        session,
+        detect_local_entropy=detect_local_entropy,
+        window_size=window_size,
+        step=step,
+    )
     return create_response(
         session_id=session_id,
         summary=f"成功提取 {len(sections)} 个节区/段分布画像",

@@ -11,7 +11,7 @@ import re
 import struct
 from typing import Any
 
-from mcp_server_reverse.core.models import SectionProfile, SymbolEntry
+from mcp_server_reverse.core.models import LocalEntropyBlock, SectionProfile, SymbolEntry
 from mcp_server_reverse.core.parser import SENSITIVE_API_KEYWORDS, calculate_entropy
 from mcp_server_reverse.core.session import BinarySession
 
@@ -32,6 +32,125 @@ HIGH_ENTROPY_THRESHOLD: float = 7.2
 # PE 数据目录与异常项结构尺寸
 IMAGE_DIRECTORY_ENTRY_EXCEPTION_INDEX: int = 3
 RUNTIME_FUNCTION_ENTRY_SIZE: int = 12
+
+
+def scan_local_entropy_blocks(
+    data: bytes,
+    raw_offset: int,
+    base_va: int | None,
+    window_size: int = 2048,
+    step: int = 1024,
+) -> list[LocalEntropyBlock]:
+    """使用滑动窗口对数据块进行细粒度香农熵扫描并合并重叠连续高熵区间
+
+    @param data 待分析的数据字节串 (包含有效 COW 补丁)
+    @param raw_offset 数据在物理文件中的绝对起始偏移量
+    @param base_va 数据对应的基准虚拟内存地址 (若不可映射则为 None)
+    @param window_size 滑动窗口字节尺寸 (缺省 2048)
+    @param step 滑动步长 (缺省 1024)
+    @return list[LocalEntropyBlock] 探测合并后的局部高熵块列表，无匹配时返回空列表
+    """
+    if not data:
+        return []
+
+    # 1. 防御性校验与参数自适应规整
+    actual_window = 2048 if window_size <= 0 else window_size
+    actual_step = 1024 if step <= 0 else step
+
+    total_len = len(data)
+    if total_len < actual_window:
+        return []
+
+    # 超大节区防 DoS 步长自适应提升与采样熔断
+    max_iterations = 4096
+    if total_len > 16 * 1024 * 1024:
+        actual_step = max(actual_step, 4096)
+    if total_len // actual_step > max_iterations:
+        actual_step = max(actual_step, total_len // max_iterations)
+
+    # 2. 收集所有命中高熵阈值的滑动窗口
+    offsets: list[int] = list(range(0, total_len - actual_window + 1, actual_step))
+    last_offset = total_len - actual_window
+    if last_offset > 0 and (not offsets or offsets[-1] != last_offset):
+        offsets.append(last_offset)
+
+    high_windows: list[tuple[int, int, float]] = []
+    for start_rel in offsets:
+        chunk = data[start_rel : start_rel + actual_window]
+        ent = calculate_entropy(chunk)
+        if ent >= HIGH_ENTROPY_THRESHOLD:
+            high_windows.append((start_rel, start_rel + actual_window, ent))
+
+    if not high_windows:
+        return []
+
+    # 3. 连续与重叠高熵区间合并
+    merged: list[tuple[int, int, float]] = []
+    cur_start, cur_end, cur_max_ent = high_windows[0]
+
+    for w_start, w_end, w_ent in high_windows[1:]:
+        if w_start <= cur_end:
+            cur_end = max(cur_end, w_end)
+            cur_max_ent = max(cur_max_ent, w_ent)
+        else:
+            merged.append((cur_start, cur_end, cur_max_ent))
+            cur_start, cur_end, cur_max_ent = w_start, w_end, w_ent
+
+    merged.append((cur_start, cur_end, cur_max_ent))
+
+    # 4. 构建结构化局部高熵块列表
+    blocks: list[LocalEntropyBlock] = []
+    for start, end, max_ent in merged:
+        block_offset = raw_offset + start
+        block_size = end - start
+        va_str = f"0x{base_va + start:X}" if base_va is not None else None
+        blocks.append(
+            LocalEntropyBlock(
+                offset=block_offset,
+                virtual_address=va_str,
+                size=block_size,
+                max_entropy=round(max_ent, 4),
+            )
+        )
+
+    return blocks
+
+
+def _detect_section_local_entropy(
+    session: BinarySession,
+    raw_offset: int,
+    raw_size: int,
+    base_va: int | None,
+    detect_local_entropy: bool,
+    window_size: int,
+    step: int,
+) -> list[LocalEntropyBlock]:
+    """读取节区物理有效字节并执行局部高熵块探测
+
+    @param session 当前激活的二进制分析会话
+    @param raw_offset 节区文件物理起始偏移量
+    @param raw_size 节区物理字节尺寸
+    @param base_va 节区基准虚拟内存地址
+    @param detect_local_entropy 是否启用局部高熵块探测
+    @param window_size 滑动窗口尺寸
+    @param step 滑动步长
+    @return list[LocalEntropyBlock] 探测结果列表，未启用或异常时返回空列表
+    """
+    if not detect_local_entropy or raw_size <= 0 or raw_offset < 0:
+        return []
+
+    try:
+        sec_data = session.read_effective_bytes(raw_offset, raw_size)
+        return scan_local_entropy_blocks(
+            data=sec_data,
+            raw_offset=raw_offset,
+            base_va=base_va,
+            window_size=window_size,
+            step=step,
+        )
+    except Exception as exc:
+        logger.debug("节区局部高熵块探测异常: %s", exc)
+        return []
 
 
 def _format_rwx(readable: bool, writable: bool, executable: bool) -> str:
@@ -60,10 +179,18 @@ def _parse_pe_permissions(characteristics: int) -> str:
     return _format_rwx(readable, writable, executable)
 
 
-def extract_sections(session: BinarySession) -> list[SectionProfile]:
+def extract_sections(
+    session: BinarySession,
+    detect_local_entropy: bool = True,
+    window_size: int = 2048,
+    step: int = 1024,
+) -> list[SectionProfile]:
     """提取二进制全量节区/段分布画像与香农熵
 
     @param session 当前激活的二进制分析会话
+    @param detect_local_entropy 是否启用基于滑动窗口的细粒度局部高熵块探测 (缺省 True)
+    @param window_size 滑动窗口字节尺寸 (缺省 2048)
+    @param step 滑动步长 (缺省 1024)
     @return list[SectionProfile] 节区画像列表，无节区时返回空列表
     """
     profiles: list[SectionProfile] = []
@@ -106,6 +233,16 @@ def extract_sections(session: BinarySession) -> list[SectionProfile]:
             entropy = round(float(ent), 4)
             is_high_entropy = entropy >= HIGH_ENTROPY_THRESHOLD
 
+            local_blocks = _detect_section_local_entropy(
+                session=session,
+                raw_offset=raw_offset,
+                raw_size=raw_size,
+                base_va=abs_va if abs_va != 0 else None,
+                detect_local_entropy=detect_local_entropy,
+                window_size=window_size,
+                step=step,
+            )
+
             profiles.append(
                 SectionProfile(
                     name=sec_name,
@@ -116,6 +253,7 @@ def extract_sections(session: BinarySession) -> list[SectionProfile]:
                     permissions=perms,
                     entropy=entropy,
                     is_high_entropy=is_high_entropy,
+                    local_high_entropy_blocks=local_blocks,
                 )
             )
         return profiles
@@ -143,6 +281,16 @@ def extract_sections(session: BinarySession) -> list[SectionProfile]:
             entropy = round(float(ent), 4)
             is_high_entropy = entropy >= HIGH_ENTROPY_THRESHOLD
 
+            local_blocks = _detect_section_local_entropy(
+                session=session,
+                raw_offset=raw_offset,
+                raw_size=raw_size,
+                base_va=abs_va if abs_va != 0 else None,
+                detect_local_entropy=detect_local_entropy,
+                window_size=window_size,
+                step=step,
+            )
+
             profiles.append(
                 SectionProfile(
                     name=sec_name,
@@ -153,6 +301,7 @@ def extract_sections(session: BinarySession) -> list[SectionProfile]:
                     permissions=perms,
                     entropy=entropy,
                     is_high_entropy=is_high_entropy,
+                    local_high_entropy_blocks=local_blocks,
                 )
             )
 
