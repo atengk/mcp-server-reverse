@@ -15,6 +15,7 @@ from mcp_server_reverse.core.parser import BinaryParser
 from mcp_server_reverse.core.security import SecurityGuard
 from mcp_server_reverse.core.session import SessionStore
 from mcp_server_reverse.tools.capabilities import get_capabilities_impl
+from mcp_server_reverse.tools.cfg import analyze_cfg_impl
 from mcp_server_reverse.tools.disasm import (
     convert_address_impl,
     decompile_function_impl,
@@ -531,6 +532,32 @@ def create_mcp_server(config: ServerConfig) -> MCPServer:
         return revert_patch_impl(
             session_id=session_id,
             patch_id=patch_id,
+            session_store=session_store,
+        )
+
+    @server.tool(
+        name="analyze_cfg",
+        description=(
+            "抽取指定函数入口或符号的控制流图 (CFG)，执行基本块划分 (Leader 算法)、"
+            "后继边分支分析 (True/False/Unconditional)、圈复杂度计算并生成 Mermaid 流程图"
+        ),
+    )
+    def analyze_cfg(
+        session_id: str,
+        target: str,
+        max_blocks: int = 100,
+    ) -> dict[str, Any]:
+        """抽取指定函数的单入口单出口基本块、控制流拓扑与 Mermaid 流程图
+
+        @param session_id 目标活跃分析会话标识
+        @param target 目标函数起始虚拟地址表达式 (如 '0x140001000') 或符号名称
+        @param max_blocks 最大提取基本块数量上限 (默认 100)
+        @return dict[str, Any] 控制流分析响应字典
+        """
+        return analyze_cfg_impl(
+            session_id=session_id,
+            target=target,
+            max_blocks=max_blocks,
             session_store=session_store,
         )
 

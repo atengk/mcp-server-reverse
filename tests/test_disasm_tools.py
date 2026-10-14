@@ -214,6 +214,7 @@ async def test_mcp_server_registers_all_tools() -> None:
         "patch_memory",
         "list_patches",
         "revert_patch",
+        "analyze_cfg",
     }
     assert tool_names == expected_tools
-    assert len(tool_names) == 18
+    assert len(tool_names) == 19

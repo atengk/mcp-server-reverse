@@ -342,6 +342,55 @@ class PatchRecord:
 
 
 @dataclass
+class CFGEdge:
+    """控制流图 (CFG) 基本块之间的有向分支边模型
+
+    @param target_address 目标基本块起始虚拟地址 (十六进制字符串, 如 '0x140001008')
+    @param branch_type 分支跳转语义类型 ('true_branch', 'false_branch', 'unconditional')
+    """
+
+    target_address: str
+    branch_type: str = "unconditional"
+
+    def to_dict(self) -> dict[str, str]:
+        """将分支边序列化为字典对象"""
+        return asdict(self)
+
+
+@dataclass
+class BasicBlock:
+    """控制流图 (CFG) 中的原子基本块模型
+
+    @param block_id 块唯一标识 (如 'bb_0', 'bb_1')
+    @param start_address 起始虚拟地址 (十六进制字符串, 如 '0x140001000')
+    @param end_address 终止虚拟地址 (末条指令地址)
+    @param size 基本块占用的总字节数
+    @param instruction_count 基本块包含的指令条数
+    @param instructions 格式化后的紧凑指令行列表
+    @param successors 后继基本块跳转分支边列表
+    @param terminator_mnemonic 终止跳转助记符 (如 'jz', 'jmp', 'ret' 等)
+    """
+
+    block_id: str
+    start_address: str
+    end_address: str
+    size: int
+    instruction_count: int
+    instructions: list[str] = field(default_factory=list)
+    successors: list[CFGEdge] = field(default_factory=list)
+    terminator_mnemonic: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        """将基本块序列化为字典对象
+
+        @return dict[str, Any] 序列化字典对象
+        """
+        data = asdict(self)
+        data["successors"] = [s if isinstance(s, dict) else asdict(s) for s in self.successors]
+        return data
+
+
+@dataclass
 class ResponseEnvelope:
     """所有 MCP Tools 统一标准响应信封
 
