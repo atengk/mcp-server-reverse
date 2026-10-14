@@ -6,6 +6,7 @@
 
 import struct
 from pathlib import Path
+from typing import Any
 
 # 标准 AES S-Box 256 字节常量表
 AES_SBOX = bytes(
@@ -564,4 +565,137 @@ def build_synthetic_macho64(output_path: Path) -> Path:
     payload = macho_hdr + padding
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_bytes(payload)
+    return output_path
+
+
+def build_synthetic_pe_with_rich_header(output_path: Path) -> Path:
+    """动态合成带有标准 Rich Header 的 64 位 PE 文件并落盘
+
+    包含：
+    - DOS 头部与 e_lfanew 重定向
+    - DanS / Rich 结构，内嵌 ProdID 257 (Utc1900_C) 与 ProdID 259 (Linker1400)
+    - 基础 PE64 头部与最小 .text 节区
+
+    Args:
+        output_path: 目标输出物理文件路径
+
+    Returns:
+        Path: 成功落盘的文件路径
+    """
+    dans_magic = 0x536E6144  # 'DanS'
+    rich_magic = 0x68636952  # 'Rich'
+    xor_key = 0x12345678
+
+    comp_id1 = (257 << 16) | 24215  # Utc1900_C
+    count1 = 5
+    comp_id2 = (259 << 16) | 24215  # Linker1400
+    count2 = 1
+
+    rich_bytes = bytearray()
+    rich_bytes += struct.pack("<IIII", dans_magic ^ xor_key, xor_key, xor_key, xor_key)
+    rich_bytes += struct.pack("<II", comp_id1 ^ xor_key, count1 ^ xor_key)
+    rich_bytes += struct.pack("<II", comp_id2 ^ xor_key, count2 ^ xor_key)
+    rich_bytes += struct.pack("<II", rich_magic, xor_key)
+
+    pe_offset = 0x80 + len(rich_bytes)
+    dos_header = bytearray(0x80)
+    dos_header[0:2] = b"MZ"
+    struct.pack_into("<I", dos_header, 0x3C, pe_offset)
+
+    pe_sig = b"PE\x00\x00"
+    file_header = struct.pack("<HHIIIHH", 0x8664, 1, 0, 0, 0, 240, 0x0022)
+    opt_header = bytearray(240)
+    struct.pack_into("<H", opt_header, 0, 0x020B)
+    struct.pack_into("<I", opt_header, 16, 0x1000)
+    struct.pack_into("<Q", opt_header, 24, 0x140000000)
+    struct.pack_into("<I", opt_header, 32, 0x1000)
+    struct.pack_into("<I", opt_header, 36, 0x200)
+    struct.pack_into("<I", opt_header, 56, 0x3000)
+    struct.pack_into("<I", opt_header, 60, 0x200)
+    struct.pack_into("<H", opt_header, 68, 2)
+    struct.pack_into("<H", opt_header, 70, 0x0140)
+    struct.pack_into("<I", opt_header, 108, 16)
+
+    sec = bytearray(40)
+    sec[0:5] = b".text"
+    struct.pack_into("<I", sec, 8, 0x200)
+    struct.pack_into("<I", sec, 12, 0x1000)
+    struct.pack_into("<I", sec, 16, 0x200)
+    struct.pack_into("<I", sec, 20, 0x200)
+    struct.pack_into("<I", sec, 36, 0x60000020)
+
+    full_pe = bytearray(dos_header + rich_bytes + pe_sig + file_header + opt_header + sec)
+    if len(full_pe) < 0x400:
+        full_pe += b"\x00" * (0x400 - len(full_pe))
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_bytes(bytes(full_pe))
+    return output_path
+
+
+def build_synthetic_macho_with_entitlements(
+    output_path: Path,
+    entitlements_dict: dict[str, Any] | None = None,
+) -> Path:
+    """动态合成带有代码签名与 Entitlements 权限清单的 64 位 Mach-O 文件并落盘
+
+    包含：
+    - Mach-O 64-bit Header (ARM64)
+    - LC_CODE_SIGNATURE 加载命令
+    - Embedded SuperBlob 结构与 CSSLOT_ENTITLEMENTS (slot 5) XML 载荷
+
+    Args:
+        output_path: 目标输出物理文件路径
+        entitlements_dict: 可选自定义权限清单字典
+
+    Returns:
+        Path: 成功落盘的文件路径
+    """
+    import plistlib
+
+    if entitlements_dict is None:
+        entitlements_dict = {
+            "com.apple.security.app-sandbox": True,
+            "com.apple.security.network.client": True,
+            "keychain-access-groups": ["TEAMID123.com.example.app"],
+        }
+    xml_data = plistlib.dumps(entitlements_dict)
+
+    csmagic_embedded_sig = 0xFADE0CC0
+    csmagic_entitlements = 0xFADE7171
+
+    blob_index_size = 8
+    superblob_header_size = 12
+    ent_offset = superblob_header_size + blob_index_size
+
+    ent_blob = struct.pack(">II", csmagic_entitlements, 8 + len(xml_data)) + xml_data
+    superblob_len = ent_offset + len(ent_blob)
+
+    superblob = bytearray()
+    superblob += struct.pack(">III", csmagic_embedded_sig, superblob_len, 1)
+    superblob += struct.pack(">II", 5, ent_offset)
+    superblob += ent_blob
+
+    lc_code_signature = 0x1D
+    lc = struct.pack("<IIII", lc_code_signature, 16, 0x100, len(superblob))
+
+    hdr = struct.pack(
+        "<IIIIIIII",
+        0xFEEDFACF,  # magic
+        0x0100000C,  # ARM64
+        0,
+        2,  # MH_EXECUTE
+        1,  # ncmds
+        16,  # sizeofcmds
+        0x00200085,  # flags
+        0,
+    )
+
+    macho_bytes = bytearray(hdr + lc)
+    if len(macho_bytes) < 0x100:
+        macho_bytes += b"\x00" * (0x100 - len(macho_bytes))
+    macho_bytes += superblob
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_bytes(bytes(macho_bytes))
     return output_path

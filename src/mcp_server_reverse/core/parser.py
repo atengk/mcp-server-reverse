@@ -14,6 +14,13 @@ from typing import Any
 import lief
 import pefile
 
+from mcp_server_reverse.core.forensic import (
+    compute_fuzzy_hash,
+    extract_macho_code_signing_and_entitlements,
+    extract_rich_header_entries,
+)
+from mcp_server_reverse.core.models import ForensicMetadata
+
 logger = logging.getLogger(__name__)
 
 # 8 类敏感行为 API 匹配关键词表
@@ -333,13 +340,20 @@ class BinaryParser:
             "rich_header_hash": rich_header_hash,
         }
 
-        forensic_metadata: dict[str, Any] = {
-            "tls_callbacks": tls_callbacks,
-            "debug_info": debug_info,
-            "overlay": overlay_info,
-            "code_signing": {"is_signed": False},
-            "needed_libraries": needed_libraries,
-        }
+        rich_entries = extract_rich_header_entries(pe_obj)
+        fuzzy_hash = compute_fuzzy_hash(bundle.raw_bytes)
+
+        forensic = ForensicMetadata(
+            tls_callbacks=tls_callbacks,
+            debug_info=debug_info,
+            overlay=overlay_info,
+            code_signing={"is_signed": False},
+            needed_libraries=needed_libraries,
+            rich_header_entries=rich_entries,
+            fuzzy_hash=fuzzy_hash,
+            entitlements={},
+        )
+        forensic_metadata = forensic.to_dict()
 
         return ParseResult(
             file_info=file_info,
@@ -407,13 +421,18 @@ class BinaryParser:
             "packing_hint": None,
         }
 
-        forensic_metadata: dict[str, Any] = {
-            "tls_callbacks": [],
-            "debug_info": {"pdb_path": None, "timestamp": None, "rich_header_hash": None},
-            "overlay": None,
-            "code_signing": {"is_signed": False},
-            "needed_libraries": needed_libraries,
-        }
+        fuzzy_hash = compute_fuzzy_hash(bundle.raw_bytes)
+        forensic = ForensicMetadata(
+            tls_callbacks=[],
+            debug_info={"pdb_path": None, "timestamp": None, "rich_header_hash": None},
+            overlay=None,
+            code_signing={"is_signed": False},
+            needed_libraries=needed_libraries,
+            rich_header_entries=[],
+            fuzzy_hash=fuzzy_hash,
+            entitlements={},
+        )
+        forensic_metadata = forensic.to_dict()
 
         return ParseResult(
             file_info=file_info,
@@ -434,17 +453,21 @@ class BinaryParser:
         """解析 macOS Mach-O 格式二进制 (支持 Fat 通用二进制切片决议)"""
         fat_bin = None
         available_archs: list[str] = []
+        arch_map: dict[str, Any] = {}
         try:
             fat_bin = lief.MachO.parse(str(path))
             if fat_bin:
                 for b in fat_bin:
                     cpu_type = str(b.header.cpu_type).lower()
                     if "arm64" in cpu_type or "aarch64" in cpu_type:
-                        available_archs.append("arm64")
+                        arch_name = "arm64"
                     elif "x86_64" in cpu_type:
-                        available_archs.append("x86_64")
+                        arch_name = "x86_64"
                     else:
-                        available_archs.append(cpu_type)
+                        arch_name = cpu_type
+                    available_archs.append(arch_name)
+                    if arch_name not in arch_map:
+                        arch_map[arch_name] = b
         except Exception as exc:
             logger.debug("解析 MachO 异常: %s", exc)
 
@@ -460,6 +483,10 @@ class BinaryParser:
                 resolved_arch = "x86_64"
             else:
                 resolved_arch = available_archs[0]
+
+        target_bin = arch_map.get(resolved_arch)
+        if target_bin is None and fat_bin and len(fat_bin) > 0:
+            target_bin = fat_bin[0]
 
         file_info: dict[str, Any] = {
             "file_name": path.name,
@@ -493,13 +520,22 @@ class BinaryParser:
             "packing_hint": None,
         }
 
-        forensic_metadata: dict[str, Any] = {
-            "tls_callbacks": [],
-            "debug_info": {"pdb_path": None, "timestamp": None, "rich_header_hash": None},
-            "overlay": None,
-            "code_signing": {"is_signed": False},
-            "needed_libraries": [],
-        }
+        code_signing, entitlements = extract_macho_code_signing_and_entitlements(
+            target_bin, bundle.raw_bytes
+        )
+        fuzzy_hash = compute_fuzzy_hash(bundle.raw_bytes)
+
+        forensic = ForensicMetadata(
+            tls_callbacks=[],
+            debug_info={"pdb_path": None, "timestamp": None, "rich_header_hash": None},
+            overlay=None,
+            code_signing=code_signing,
+            needed_libraries=[],
+            rich_header_entries=[],
+            fuzzy_hash=fuzzy_hash,
+            entitlements=entitlements,
+        )
+        forensic_metadata = forensic.to_dict()
 
         return ParseResult(
             file_info=file_info,

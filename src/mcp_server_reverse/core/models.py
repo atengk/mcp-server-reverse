@@ -611,3 +611,65 @@ class YaraMatch:
         @return dict[str, Any] 序列化字典对象
         """
         return asdict(self)
+
+
+@dataclass
+class RichHeaderEntry:
+    """PE Rich Header 编译构建组件记录
+
+    @author Ateng
+    @since 2026-10-14
+
+    @param comp_id 组件 32 位唯一标识符 (ProdID << 16 | BuildNumber)
+    @param prod_id 产品/工具链 ID
+    @param prod_name 已知 Visual Studio 编译器或工具链产品名称 (如 "Utc1900_C", "Linker1400")
+    @param build_number 内部编译器构建版本号
+    @param use_count 组件在编译链接过程中的引用/对象计数
+    """
+
+    comp_id: int
+    prod_id: int
+    prod_name: str
+    build_number: int
+    use_count: int
+
+    def to_dict(self) -> dict[str, Any]:
+        """将 Rich Header 条目序列化为字典对象
+
+        @return dict[str, Any] 序列化字典对象
+        """
+        return asdict(self)
+
+
+@dataclass
+class ForensicMetadata:
+    """二进制纵深数字取证特征元数据画像
+
+    @author Ateng
+    @since 2026-10-14
+
+    @param tls_callbacks PE TLS 回调函数虚拟地址十六进制列表
+    @param debug_info 调试与符号信息 (pdb_path, timestamp, rich_header_hash)
+    @param overlay 尾部未映射 Overlay 附加数据元数据 (offset, size, entropy, is_high_entropy)
+    @param code_signing 代码签名状态画像 (is_signed, cert_info, signer)
+    @param needed_libraries 显式依赖的动态链接库列表
+    @param rich_header_entries PE Rich Header 解析出的编译器构建工具链组件列表
+    @param fuzzy_hash SSDEEP / CTPH 上下文触发分段模糊哈希 (用于家族相似度比对)
+    @param entitlements Apple Mach-O 代码签名中的 XML 权限清单字典
+    """
+
+    tls_callbacks: list[str] = field(default_factory=list)
+    debug_info: dict[str, Any] = field(default_factory=dict)
+    overlay: dict[str, Any] | None = None
+    code_signing: dict[str, Any] = field(default_factory=dict)
+    needed_libraries: list[str] = field(default_factory=list)
+    rich_header_entries: list[RichHeaderEntry] = field(default_factory=list)
+    fuzzy_hash: str | None = None
+    entitlements: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        """将取证元数据画像序列化为字典对象
+
+        @return dict[str, Any] 序列化字典对象
+        """
+        return asdict(self)
