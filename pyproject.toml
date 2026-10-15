@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "atengk-mcp-server-reverse"
-version = "1.1.0"
+version = "1.2.0"
 description = "专为 AI Agent 打造的跨平台二进制静态逆向分析与数字取证 MCP Server（原生支持 PE / ELF / Mach-O，内置 LIEF + Capstone + pefile 内核并按需挂载 radare2 / objdump / floss）"
 readme = "README.md"
 license = { file = "LICENSE" }
