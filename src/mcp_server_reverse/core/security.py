@@ -134,14 +134,17 @@ class SecurityGuard:
                 ),
             )
 
-        # 5. 二进制文件格式探测与合法性校验 (PE / ELF / Mach-O)
-        is_valid_format, detected_format = self._probe_binary_format(resolved_path)
+        # 5. 二进制文件格式探测与合法性校验 (PE / ELF / Mach-O) 与轻量 Magic 嗅探 (Format Sniffer)
+        is_valid_format, detected_format, custom_suggestion = self._probe_binary_format(
+            resolved_path
+        )
         if not is_valid_format:
             return SecurityValidationResult(
                 is_valid=False,
                 error_code=ErrorCode.UNSUPPORTED_FORMAT,
                 error_message=f"不支持的文件格式: {detected_format}",
-                suggestion=(
+                suggestion=custom_suggestion
+                or (
                     "本服务仅支持 Windows PE (.exe/.dll/.sys)、"
                     "Linux ELF (.so/可执行) 与 macOS Mach-O 二进制"
                 ),
@@ -152,29 +155,40 @@ class SecurityGuard:
             resolved_path=resolved_path,
         )
 
-    def _probe_binary_format(self, path: Path) -> tuple[bool, str]:
-        """通过文件魔数预判二进制是否为 PE、ELF 或 Mach-O
+    def _probe_binary_format(self, path: Path) -> tuple[bool, str, str | None]:
+        """通过文件魔数预判二进制是否为 PE、ELF 或 Mach-O，并针对非受支持格式进行轻量嗅探
 
         @param path 目标可执行文件绝对路径
-        @return tuple[bool, str] (是否支持, 探测到的格式名称)
+        @return tuple[bool, str, str | None] (是否支持, 探测到的格式名称, 定制重定向建议)
         """
         try:
             with path.open("rb") as f:
                 header = f.read(1024)
         except OSError as exc:
-            return False, f"读取文件头部失败: {exc}"
+            return False, f"读取文件头部失败: {exc}", None
 
         if len(header) < 4:
-            return False, "文件字节过短，无法解析头部"
+            return False, "文件字节过短，无法解析头部", None
 
         # 1. ELF
         if header.startswith(b"\x7fELF"):
-            return True, "ELF"
+            return True, "ELF", None
 
-        # 2. Mach-O
+        # 2. Mach-O 与 Java Class 区分 (0xCAFEBABE 魔数共享处理)
         magic4 = header[:4]
         if magic4 in MACHO_MAGICS:
-            return True, "Mach-O"
+            if magic4 == b"\xca\xfe\xba\xbe" and len(header) >= 8:
+                import struct
+
+                nfat = struct.unpack(">I", header[4:8])[0]
+                if nfat >= 45 or path.suffix.lower() == ".class":
+                    return (
+                        False,
+                        "Java Class 字节码",
+                        "目标文件为 Java Class 字节码文件，"
+                        "建议使用 CFR、Fernflower 或 JD-GUI 进行反编译。",
+                    )
+            return True, "Mach-O", None
 
         # 3. PE (MZ 头部且在 e_lfanew 偏移处为 PE\0\0)
         if header.startswith(b"MZ") and len(header) >= 0x40:
@@ -184,14 +198,93 @@ class SecurityGuard:
             if len(header) >= e_lfanew + 4:
                 pe_sig = header[e_lfanew : e_lfanew + 4]
                 if pe_sig == b"PE\x00\x00":
-                    return True, "PE"
+                    return True, "PE", None
             else:
                 try:
                     with path.open("rb") as f:
                         f.seek(e_lfanew)
                         if f.read(4) == b"PE\x00\x00":
-                            return True, "PE"
+                            return True, "PE", None
                 except OSError as exc:
                     logger.debug("读取 PE 签名失败: %s", exc)
 
-        return False, "非受支持的 PE/ELF/Mach-O 二进制文件"
+        # 4. 未受支持二进制的轻量 Magic 格式嗅探与工具链重定向指引 (Format Sniffer)
+        # 4.1 Adobe Flash SWF
+        if header.startswith(b"FWS") or header.startswith(b"CWS") or header.startswith(b"ZWS"):
+            return (
+                False,
+                "Adobe Flash SWF",
+                (
+                    "目标文件为 Adobe Flash SWF 动画/程序资源（内嵌 ActionScript 1/2/3 字节码），"
+                    "本服务专注于原生机器码逆向。建议使用 FFDec (JPEXS Free Flash Decompiler) "
+                    "或 RABCDAsm 进行 AS3 源码反编译。"
+                ),
+            )
+
+        # 4.2 Android APK / DEX
+        is_apk = path.suffix.lower() == ".apk"
+        is_dex = header.startswith(b"dex\n")
+        if not is_dex and header.startswith(b"PK\x03\x04"):
+            try:
+                import zipfile
+
+                if zipfile.is_zipfile(path):
+                    with zipfile.ZipFile(path, "r") as zf:
+                        names = zf.namelist()[:30]
+                        if any(
+                            n.endswith("classes.dex") or n == "AndroidManifest.xml" for n in names
+                        ):
+                            is_apk = True
+            except Exception:
+                pass
+
+        if is_dex or is_apk:
+            return (
+                False,
+                "Android APK / DEX",
+                "目标文件为 Android DEX 字节码/APK 包，"
+                "建议使用 jadx 或 apktool 进行反编译与资产解包。",
+            )
+
+        # 4.3 WebAssembly (WASM)
+        if header.startswith(b"\x00asm"):
+            return (
+                False,
+                "WebAssembly (WASM)",
+                "目标文件为 WebAssembly 二进制模块，"
+                "建议使用 wabt 套件 (wasm2wat) 或 Ghidra WASM 插件进行分析。",
+            )
+
+        # 4.4 HTTP Traffic Archive (HAR)
+        stripped = header.lstrip()
+        if (
+            stripped.startswith(b"{")
+            and (b'"log"' in header or b"'log'" in header)
+            and (b'"version"' in header or b"'version'" in header)
+        ):
+            return (
+                False,
+                "HTTP Traffic Archive (HAR)",
+                "目标文件为 HTTP 网络流量归档 (.har)，"
+                "建议使用 traffic-inspector MCP 或 Python 流量解析脚本处理。",
+            )
+
+        # 4.5 PCAP / PCAPNG 抓包文件
+        pcap_magics = (
+            b"\xd4\xc3\xb2\xa1",
+            b"\xa1\xb2\xc3\xd4",
+            b"\x0a\x0d\x0d\x0a",
+            b"\x4d\x3c\xb2\xa1",
+            b"\xa1\xb2\x3c\x4d",
+        )
+        if any(header.startswith(m) for m in pcap_magics):
+            return (
+                False,
+                "PCAP 网络抓包文件",
+                (
+                    "目标文件为网络底层抓包文件，建议使用 traffic-inspector MCP "
+                    "(analyze_pcap_file) 或 tshark 进行离线流重组分析。"
+                ),
+            )
+
+        return False, "非受支持的 PE/ELF/Mach-O 二进制文件", None

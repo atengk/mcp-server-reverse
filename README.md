@@ -9,13 +9,16 @@
 
 **`mcp-server-reverse`**（PyPI 包名：**`atengk-mcp-server-reverse`**）是一款专为 AI Agent / LLM 打造的跨平台**下一代二进制静态逆向分析与纵深数字取证（DFIR）MCP Server**。
 
-采用**“纯 Python 静态分析内核（`lief` + `capstone` + `pefile`）+ 按需外部 CLI 增强适配层（`radare2` / `objdump` / `floss` / `yara`）”**混合分层架构：无需预装庞大的商业逆向套件，开箱即可对 **PE（`.exe`/`.dll`/`.sys`）、ELF（Linux/Android `.so`）、Mach-O（macOS/iOS，含 Fat Binary 多架构切片）** 执行全景静态画像、函数控制流图（CFG）抽取、写时复制（COW）内存虚拟打补丁、滑动窗口局部高熵块探测、全平台漏洞缓解加固审计、YARA 规则匹配、PE Rich Header 编译器版本追溯、纯 Python SSDEEP 模糊哈希计算、Mach-O Entitlements 清单提取、PE64 `.pdata` 无符号函数恢复以及 `RIP/PC-relative` 交叉引用（Xref）定位；当宿主机或容器环境存在外部工具时，自动解锁伪代码反编译与混淆栈字符串解码。
+采用**“纯 Python 静态分析内核（`lief` + `capstone` + `pefile`）+ 按需外部 CLI 增强适配层（`radare2` / `objdump` / `floss` / `yara`）”**混合分层架构：无需预装庞大的商业逆向套件，开箱即可对 **PE（`.exe`/`.dll`/`.sys`）、ELF（Linux/Android `.so`）、Mach-O（macOS/iOS，含 Fat Binary 多架构切片）** 执行全景静态画像、函数控制流图（CFG）抽取、写时复制（COW）内存虚拟打补丁、滑动窗口局部高熵块探测、全平台漏洞缓解加固审计、YARA 规则匹配、PE Rich Header 编译器版本追溯、纯 Python SSDEEP 模糊哈希计算、Mach-O Entitlements 清单提取、PE64 `.pdata` 无符号函数恢复、`RIP/PC-relative` 交叉引用（Xref）定位、**.NET CLR 托管程序与运行时版本自动分诊**（[ADR-0007](./docs/adr/0007-clr-managed-assembly-triage.md)）以及**非原生格式智能魔数嗅探（Format Sniffer）**；当宿主机或容器环境存在外部工具时，自动解锁伪代码反编译与混淆栈字符串解码。
 
 ---
 
 ## ✨ 核心特性
 
-- **100% 纯 Python 核心底座**：基于 `lief`、`capstone`、`pefile` 构建跨格式解析内核，零外部 CLI 依赖即可原生运行 19 个核心逆向分析与数字取证工具。
+- **100% 纯 Python 核心底座与 PE 双轨稳健解析**：基于 `lief`、`capstone`、`pefile` 构建跨格式解析内核，针对非标或加壳的 32 位（PE32）与 64 位（PE32+）样本具备 `pefile` 双轨回退解析防御，零外部 CLI 依赖即可原生运行 19 个核心逆向分析与数字取证工具。
+- **.NET CLR 托管程序自动分诊与 CIL 引导**：自动检测 PE 数据目录项 `IMAGE_DIRECTORY_ENTRY_COM_DESCRIPTOR`，通过 ECMA-335 `BSJB` 根元数据解析提取精准的目标运行时版本（如 `v4.0.30319`），并为 AI Agent 注入专用 CIL 反编译引导（ILSpy / dnSpy），终结在原生汇编引导桩上的盲目试错。
+- **未支持格式智能魔数嗅探 (Format Sniffer)**：针对 Adobe Flash (SWF)、Android (DEX/APK)、WebAssembly (WASM)、网络流量归档 (HAR) 与底层抓包文件 (PCAP/PCAPNG)，在安全边界层自动通过特征魔数识别并返回结构化工具链重定向建议，赋能 Agent 智能自纠偏。
+- **面向 Agent 的自然语言参数别名自愈容错**：在核心逆向工具中深度集成 Pydantic `AliasChoices`，原生容错 `query`/`needle`、`target`/`address`、`name`/`name_filter` 等常见大模型参数命名幻觉，赋予 Agent 零样本（Zero-Shot）工具调用的极佳鲁棒性。
 - **函数控制流图 (CFG) 与 Mermaid 可视化**：自动切分单入口单出口基本块（`BasicBlock`），计算条件跳转、循环回跳边与圈复杂度，并直接输出紧凑规范的 Mermaid `flowchart TD` 流程图文本供 Agent 直观阅读与拓扑推演。
 - **写时复制 (COW) 内存虚拟打补丁与只读保真机制**：物理磁盘样本保持 100% 只读保真；在分析会话内支持原子内存字节修改、分支反转 What-If 假设推演、即时反汇编与 CFG 动态重绘，并支持随时查看与一键原子回滚。
 - **全平台利用缓解机制跨架构画像与安全评分**：深度审计 Windows（DEP/ASLR/SafeSEH/CFG/CET）、Linux（NX/PIE/RELRO/Canary/FORTIFY）与 macOS（PIE/代码签名/Hardened Runtime），输出加权安全评分（0~100）与利用难度量化评级。
@@ -32,10 +35,10 @@
 
 | 业务分组 | Tool 名称 | 核心职责与关键能力说明 |
 | :--- | :--- | :--- |
-| **1. 会话与全景画像**<br>(`Triage & Session`) | `open_binary` | 校验沙箱并加载二进制至 LRU 缓存，返回哈希（含 Imphash/SSDEEP）、防护标志、高熵加壳预警及深度取证画像（TLS 回调、PDB/Rich Header 编译器指纹、Overlay 附加数据、代码签名与 Mach-O Entitlements 清单） |
+| **1. 会话与全景画像**<br>(`Triage & Session`) | `open_binary` | 校验沙箱并加载二进制至 LRU 缓存，集成 Format Sniffer 智能魔数嗅探拦截与工具链重定向；自动识别 .NET CLR 托管程序（`is_managed`、`clr_runtime_version` 与 `clr_guidance` 转向建议）；返回哈希（含 Imphash/SSDEEP）、防护标志、高熵加壳预警及深度取证画像（TLS 回调、PDB/Rich Header 编译器指纹、Overlay 附加数据、代码签名与 Mach-O Entitlements 清单） |
 | | `list_sessions` | 列出当前内存中驻留的所有二进制分析会话元数据摘要与时间戳 |
 | | `close_session` | 显式释放指定 `session_id` 或一键清空全部缓存会话以回收系统内存 |
-| **2. 结构与符号检视**<br>(`Structure & Symbols`) | `get_sections` | 获取所有节区/段分布、权限、全局香农熵（`0.0~8.0`），可选开启 `detect_local_entropy` 滑动窗口精准探测局部高熵隐蔽块 |
+| **2. 结构与符号检视**<br>(`Structure & Symbols`) | `get_sections` | 获取所有节区/段分布、权限、全局香农熵（`0.0~8.0`），支持 `name_filter` 正则过滤，可选开启 `detect_local_entropy` 滑动窗口精准探测局部高熵隐蔽块 |
 | | `get_imports` | 分页检索导入表，支持按库名、函数名正则与 8 类敏感行为标签（`crypto`、`process_injection`、`anti_debug` 等）过滤 |
 | | `get_exports` | 分页检索导出函数表、序号（Ordinal）、虚拟地址与转发器（Forwarder） |
 | | `get_symbols` | 分页检索静态/动态符号表；针对 64 位 PE 自动解析 `.pdata` 异常目录恢复无符号内部函数 `sub_<va>`（标注字节长度与 `exception_frame` 类型） |
@@ -53,6 +56,25 @@
 | **6. 安全加固与外部增强**<br>(`Mitigations & Capabilities`) | `audit_mitigations` | 系统化审计目标二进制的跨平台漏洞利用缓解措施，输出 0~100 安全评分与利用难度评级（Low/Medium/High/Extreme） |
 | | `decompile_function` | 受控异步调用本地 `radare2`/`rizin` 生成目标函数的类 C 伪代码；未安装时返回结构化安装指引与软降级建议 |
 | | `get_capabilities` | 返回核心引擎版本、安全沙箱边界配置及四级寻址器探测到的外部 CLI 工具可用状态 |
+
+### 🤖 Agent 鲁棒性与参数别名映射 (Parameter Aliasing)
+
+在由 LLM / AI Agent 驱动的自主逆向分析编排中，大模型常因自然语言提示的微小差异产生参数名同义词幻觉（例如习惯性传入 `query` 而非 `pattern`，或传入 `address` 而非 `target`）。本服务端基于 Pydantic `AliasChoices` 实现了**零样本调用的自愈容错机制**，原生兼容以下参数别名：
+
+| MCP Tool | 标准参数名 | 支持的参数别名 (Validation Aliases) | 典型应用与防幻觉场景 |
+| :--- | :--- | :--- | :--- |
+| `search_strings` | `pattern` | `filter`, `query`, `keyword`, `search` | 兼容模型以 `query: "password"` 或 `keyword: "http"` 检索字符串 |
+| `search_bytes_and_constants` | `hex_pattern` | `pattern`, `filter`, `query`, `keyword`, `search` | 兼容模型以 `pattern: "48 89 5C"` 检索十六进制特征 |
+| `get_sections` | `name_filter` | `name`, `filter`, `query`, `pattern` | 兼容模型以 `name: ".text"` 或 `filter: ".rsrc"` 检索指定节区 |
+| `get_imports` | `name_filter` | `name`, `filter`, `query`, `pattern` | 兼容模型以 `query: "VirtualAlloc"` 检索目标 API |
+| `get_exports` | `name_filter` | `name`, `filter`, `query`, `pattern` | 兼容模型以 `name: "CreateProcess"` 筛选导出符号 |
+| `get_symbols` | `name_filter` | `name`, `filter`, `query`, `pattern` | 兼容模型以 `query: "main"` 检索符号表 |
+| `convert_address` | `address` | `target`, `va`, `offset`, `location` | 兼容模型以 `target: "0x140001000"` 传入待转换地址 |
+| `read_memory` | `address` | `target`, `va`, `offset`, `location` | 兼容模型以 `target` 或 `va` 指定内存读取基准地址 |
+| `disassemble` | `target` | `location`, `address`, `va`, `entry` | 兼容模型以 `address` 或 `entry` 指定反汇编入口 |
+| `find_xrefs` | `target` | `location`, `address`, `va`, `entry` | 兼容模型以 `address` 或 `location` 指定被引用目标 |
+| `analyze_cfg` | `target` | `location`, `address`, `va`, `entry` | 兼容模型以 `entry` 或 `address` 指定函数控制流分析入口 |
+| `decompile_function` | `target` | `location`, `address`, `va`, `entry` | 兼容模型以 `address` 或 `entry` 指定伪代码反编译函数 |
 
 ---
 
@@ -154,6 +176,18 @@ docker run -d \
 > 2. 使用 `find_xrefs` 定位引用了该密码学常量表的代码地址；
 > 3. 调用 `get_symbols(symbol_type="exception_frame")` 查看通过 `.pdata` 异常目录恢复出的 `sub_<va>` 内部函数列表，定位所属函数并反汇编分析其加密流程。”
 
+### 场景 9：.NET CLR 托管程序自动分诊与反编译转译引导 (.NET Assembly Triage)
+> “请对 `D:/samples/client_payload.exe` 进行初筛分诊：
+> 1. 调用 `open_binary` 检查该文件是否为 .NET 托管程序（检查返回的 `is_managed` 与 `runtime` 字段）；
+> 2. 若 `is_managed=true`，读取并汇报其目标 CLR 运行时版本（如 `clr_runtime_version: "v4.0.30319"`）与 `clr_guidance` 行动建议；
+> 3. 解释为何不建议在此类文件上直接调用原生机器码反汇编（`disassemble`），并推荐合适的 CIL 反编译器（如 ILSpy、dnSpy 或 `python-net-decompiler`）以还原高质量 C# 源码。”
+
+### 场景 10：未支持文件魔数嗅探与外部专业工具链智能导流 (Format Sniffer Redirection)
+> “安全分析中捕获到一个未知文件 `D:/samples/unknown_asset.dat`，请尝试加载并研判：
+> 1. 调用 `open_binary` 打开该文件；
+> 2. 若返回 `UNSUPPORTED_FORMAT` 错误，检查 `FormatSniffer` 识别出的实际格式分类（如 Adobe Flash SWF、Android APK/DEX、WebAssembly WASM、HAR 流量归档或 PCAP 底层抓包）；
+> 3. 根据响应中的 `guidance` 转向建议，告知对应的下一棒分析工具（如使用 `jadx` 分析 DEX，使用 `traffic-inspector` MCP 分析 HAR/PCAP，或使用 `FFDec` 分析 SWF），避免 Agent 陷入在非机器码文件上的盲目试错。”
+
 ---
 
 ## ⚙️ CLI 参数与环境变量对照表
@@ -186,7 +220,7 @@ docker run -d \
 uv venv --python 3.12
 uv sync
 
-# 2. 运行完整自动化测试套件 (113 个测试项全量通过)
+# 2. 运行完整自动化测试套件 (122 个测试项全量通过)
 uv run pytest
 
 # 3. 运行代码规范与格式静态扫描

@@ -7,6 +7,7 @@
 import hashlib
 import logging
 import math
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -211,7 +212,11 @@ class BinaryParser:
         except Exception as exc:
             logger.debug("pefile 初始化失败: %s", exc)
 
-        lief_bin = lief.parse(str(path))
+        lief_bin = None
+        try:
+            lief_bin = lief.parse(str(path))
+        except Exception as exc:
+            logger.debug("lief 初始化解析 PE 失败: %s", exc)
 
         # Imphash
         imphash_val = None
@@ -246,6 +251,62 @@ class BinaryParser:
             if hasattr(lief_bin, "header"):
                 is_64 = lief_bin.header.machine == lief.PE.Header.MACHINE_TYPES.AMD64
 
+        # 若 LIEF 未成功解析或关键属性为空，回退到 pefile
+        if (not lief_bin or (entry_point == 0 and image_base == 0)) and pe_obj:
+            opt = getattr(pe_obj, "OPTIONAL_HEADER", None)
+            file_hdr = getattr(pe_obj, "FILE_HEADER", None)
+            machine = getattr(file_hdr, "Machine", 0) if file_hdr else 0
+            opt_magic = getattr(opt, "Magic", 0) if opt else 0
+
+            # 0x14C: IMAGE_FILE_MACHINE_I386; 0x10B: PE32 (32位)
+            if machine == 0x14C or opt_magic == 0x10B:
+                is_64 = False
+            elif machine == 0x8664 or opt_magic == 0x20B:
+                is_64 = True
+
+            if opt:
+                image_base = getattr(opt, "ImageBase", 0)
+                rva = getattr(opt, "AddressOfEntryPoint", 0)
+                entry_point = image_base + rva
+                dll_char = getattr(opt, "DllCharacteristics", 0)
+                is_pie = bool(dll_char & 0x0040)
+                has_nx = bool(dll_char & 0x0100)
+
+        # 探测 .NET CLR 托管程序与元数据 (IMAGE_DIRECTORY_ENTRY_COM_DESCRIPTOR = 14)
+        is_managed = False
+        if (
+            pe_obj
+            and hasattr(pe_obj, "OPTIONAL_HEADER")
+            and hasattr(pe_obj.OPTIONAL_HEADER, "DATA_DIRECTORY")
+        ):
+            if len(pe_obj.OPTIONAL_HEADER.DATA_DIRECTORY) > 14:
+                com_desc = pe_obj.OPTIONAL_HEADER.DATA_DIRECTORY[14]
+                va = getattr(com_desc, "VirtualAddress", 0)
+                sz = getattr(com_desc, "Size", 0)
+                is_managed = bool(va != 0 and sz != 0)
+        elif lief_bin and hasattr(lief_bin, "data_directory"):
+            try:
+                clr_dir = lief_bin.data_directory(lief.PE.DataDirectory.TYPES.CLR_RUNTIME_HEADER)
+                is_managed = bool(clr_dir and clr_dir.rva != 0 and clr_dir.size != 0)
+            except Exception:
+                pass
+
+        clr_runtime_version: str | None = None
+        if is_managed:
+            # 尝试通过 ECMA-335 BSJB 签名提取 CLR 运行时版本 (如 v4.0.30319)
+            bsjb_idx = bundle.raw_bytes.find(b"BSJB")
+            if bsjb_idx != -1 and len(bundle.raw_bytes) >= bsjb_idx + 20:
+                import struct
+
+                v_len = struct.unpack_from("<I", bundle.raw_bytes, bsjb_idx + 12)[0]
+                if 0 < v_len <= 32 and len(bundle.raw_bytes) >= bsjb_idx + 16 + v_len:
+                    raw_v = bundle.raw_bytes[bsjb_idx + 16 : bsjb_idx + 16 + v_len]
+                    clr_runtime_version = raw_v.rstrip(b"\x00").decode("ascii", errors="ignore")
+            if not clr_runtime_version:
+                m = re.search(rb"v[1-4]\.[0-9]+\.[0-9]+", bundle.raw_bytes)
+                if m:
+                    clr_runtime_version = m.group(0).decode("ascii", errors="ignore")
+
         resolved_arch = "x86_64" if is_64 else "i386"
         format_info: dict[str, Any] = {
             "format": "PE",
@@ -259,33 +320,79 @@ class BinaryParser:
             "has_nx": has_nx,
             "has_canary": False,
             "is_stripped": True,
+            "is_managed": is_managed,
+            "runtime": ".NET CLR" if is_managed else "Native",
+            "clr_runtime_version": clr_runtime_version,
         }
 
         # 节区熵与高熵列表
         high_entropy_sections: list[str] = []
         sections_count = 0
-        if lief_bin and hasattr(lief_bin, "sections"):
+        if lief_bin and hasattr(lief_bin, "sections") and len(lief_bin.sections) > 0:
             sections_count = len(lief_bin.sections)
             for sec in lief_bin.sections:
                 ent = getattr(sec, "entropy", 0.0)
                 if ent > 7.0:
                     high_entropy_sections.append(sec.name)
+        elif pe_obj and hasattr(pe_obj, "sections"):
+            sections_count = len(pe_obj.sections)
+            for sec in pe_obj.sections:
+                raw_name = getattr(sec, "Name", b"")
+                sec_name = (
+                    raw_name.rstrip(b"\x00").decode("utf-8", errors="ignore")
+                    if isinstance(raw_name, bytes)
+                    else str(raw_name)
+                )
+                try:
+                    ent = sec.get_entropy()
+                    if ent > 7.0:
+                        high_entropy_sections.append(sec_name)
+                except Exception:
+                    pass
 
         # 收集导入 API
         import_names: list[str] = []
         needed_libraries: list[str] = []
-        if lief_bin and hasattr(lief_bin, "imports"):
+        if lief_bin and hasattr(lief_bin, "imports") and len(lief_bin.imports) > 0:
             for imp in lief_bin.imports:
                 needed_libraries.append(imp.name)
                 for entry in imp.entries:
                     if entry.name:
                         import_names.append(entry.name)
+        elif pe_obj and hasattr(pe_obj, "DIRECTORY_ENTRY_IMPORT"):
+            for entry in pe_obj.DIRECTORY_ENTRY_IMPORT:
+                raw_dll = getattr(entry, "dll", b"")
+                dll_name = (
+                    raw_dll.decode("utf-8", errors="ignore")
+                    if isinstance(raw_dll, bytes)
+                    else str(raw_dll)
+                )
+                if dll_name:
+                    needed_libraries.append(dll_name)
+                for imp in getattr(entry, "imports", []):
+                    raw_imp_name = imp.name
+                    if raw_imp_name and isinstance(raw_imp_name, bytes):
+                        import_names.append(raw_imp_name.decode("utf-8", errors="ignore"))
+                    elif getattr(imp, "ordinal", None) is not None:
+                        import_names.append(f"Ordinal_{imp.ordinal}")
 
         sensitive_cats = self._classify_apis(import_names)
 
         exports_count = 0
         if lief_bin and hasattr(lief_bin, "exported_functions"):
             exports_count = len(lief_bin.exported_functions)
+        elif pe_obj and hasattr(pe_obj, "DIRECTORY_ENTRY_EXPORT"):
+            exports_count = len(getattr(pe_obj.DIRECTORY_ENTRY_EXPORT, "symbols", []))
+
+        clr_guidance = (
+            (
+                "目标文件为 .NET 托管程序 (CIL 字节码)，原生反汇编仅包含引导桩代码。"
+                "推荐优先使用 ILSpy、dnSpy 或 python-net-decompiler 等专用 .NET "
+                "反编译工具获取高可读性 C# 源码。"
+            )
+            if is_managed
+            else None
+        )
 
         triage_overview: dict[str, Any] = {
             "sections_count": sections_count,
@@ -294,6 +401,10 @@ class BinaryParser:
             "exports_count": exports_count,
             "sensitive_api_categories": sensitive_cats,
             "packing_hint": "高熵节区检出，疑似存在加密或压缩壳" if high_entropy_sections else None,
+            "is_managed": is_managed,
+            "runtime": ".NET CLR" if is_managed else "Native",
+            "clr_runtime_version": clr_runtime_version,
+            "clr_guidance": clr_guidance,
         }
 
         # Overlay 提取
@@ -399,6 +510,9 @@ class BinaryParser:
             "has_nx": getattr(lief_bin, "has_nx", False) if lief_bin else False,
             "has_canary": getattr(lief_bin, "has_canary", False) if lief_bin else False,
             "is_stripped": True,
+            "is_managed": False,
+            "runtime": "Native",
+            "clr_runtime_version": None,
         }
 
         high_entropy_sections: list[str] = []
@@ -419,6 +533,10 @@ class BinaryParser:
             "exports_count": 0,
             "sensitive_api_categories": {cat: 0 for cat in SENSITIVE_API_KEYWORDS},
             "packing_hint": None,
+            "is_managed": False,
+            "runtime": "Native",
+            "clr_runtime_version": None,
+            "clr_guidance": None,
         }
 
         fuzzy_hash = compute_fuzzy_hash(bundle.raw_bytes)
@@ -509,6 +627,9 @@ class BinaryParser:
             "has_nx": True,
             "has_canary": False,
             "is_stripped": True,
+            "is_managed": False,
+            "runtime": "Native",
+            "clr_runtime_version": None,
         }
 
         triage_overview: dict[str, Any] = {
@@ -518,6 +639,10 @@ class BinaryParser:
             "exports_count": 0,
             "sensitive_api_categories": {cat: 0 for cat in SENSITIVE_API_KEYWORDS},
             "packing_hint": None,
+            "is_managed": False,
+            "runtime": "Native",
+            "clr_runtime_version": None,
+            "clr_guidance": None,
         }
 
         code_signing, entitlements = extract_macho_code_signing_and_entitlements(

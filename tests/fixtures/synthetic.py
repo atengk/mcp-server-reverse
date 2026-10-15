@@ -699,3 +699,62 @@ def build_synthetic_macho_with_entitlements(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_bytes(bytes(macho_bytes))
     return output_path
+
+
+def build_synthetic_pe32(output_path: Path) -> Path:
+    """动态合成最小合法的 32 位 PE32 (.exe) 文件并落盘
+
+    @param output_path 目标输出物理文件路径
+    @return Path 成功落盘的文件路径
+    """
+    dos = bytearray(0x80)
+    dos[0:2] = b"MZ"
+    struct.pack_into("<I", dos, 0x3C, 0x80)
+
+    pe_sig = b"PE\x00\x00"
+    file_header = struct.pack("<HHIIIHH", 0x14C, 1, 0, 0, 0, 224, 0x0102)
+
+    opt_header = bytearray(224)
+    struct.pack_into("<H", opt_header, 0, 0x010B)  # PE32 (32-bit)
+    struct.pack_into("<I", opt_header, 16, 0x1000)  # AddressOfEntryPoint
+    struct.pack_into("<I", opt_header, 28, 0x400000)  # ImageBase
+    struct.pack_into("<I", opt_header, 32, 0x1000)  # SectionAlignment
+    struct.pack_into("<I", opt_header, 36, 0x200)  # FileAlignment
+    struct.pack_into("<I", opt_header, 56, 0x3000)  # SizeOfImage
+    struct.pack_into("<I", opt_header, 60, 0x200)  # SizeOfHeaders
+    struct.pack_into("<H", opt_header, 68, 2)  # WINDOWS_GUI
+    struct.pack_into("<H", opt_header, 70, 0x0140)  # DYNAMIC_BASE | NX_COMPAT
+    struct.pack_into("<I", opt_header, 92, 16)  # NumberOfRvaAndSizes
+
+    sec = bytearray(40)
+    sec[0:5] = b".text"
+    struct.pack_into("<IIIIIIHHI", sec, 8, 0x200, 0x1000, 0x200, 0x200, 0, 0, 0, 0, 0x60000020)
+
+    headers = dos + pe_sig + file_header + opt_header + sec
+    headers += b"\x00" * (0x200 - len(headers))
+    # 填充 x86 机器码：push ebp; mov ebp, esp; pop ebp; ret
+    body = b"\x55\x89\xe5\x5d\xc3" + b"\x90" * (0x200 - 5)
+    pe_data = headers + body
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_bytes(pe_data)
+    return output_path
+
+
+def build_synthetic_dotnet_pe(output_path: Path) -> Path:
+    """动态合成带有 CLR COM 目录描述符与 BSJB 元数据签名的 .NET 托管 PE 二进制
+
+    @param output_path 目标输出物理文件路径
+    @return Path 成功落盘的文件路径
+    """
+    build_synthetic_pe64(output_path)
+    data = bytearray(output_path.read_bytes())
+
+    # DataDirectory 14 (IMAGE_DIRECTORY_ENTRY_COM_DESCRIPTOR) 位于 0x98 + 112 + 14 * 8 = 0x178
+    struct.pack_into("<II", data, 0x178, 0x2500, 0x48)
+
+    # 追加 ECMA-335 BSJB 元数据头与 v4.0.30319 版本字符串
+    bsjb = b"BSJB\x01\x00\x00\x00\x00\x00\x00\x00" + struct.pack("<I", 12) + b"v4.0.30319\x00\x00"
+    data += bsjb
+    output_path.write_bytes(bytes(data))
+    return output_path

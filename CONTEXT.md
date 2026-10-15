@@ -76,4 +76,13 @@ _Avoid_: CryptographicHash (密码学哈希), Checksum (校验和), FileDigest (
 在整体呈现低熵（如香农熵 < 6.0）的代码段或数据段内部，通过滑动窗口算法（默认 2048 字节窗口、1024 字节步长）探测并合并检出的局部高熵（香农熵 >= 7.2）连续区间；用于敏锐发现恶意样本通过隐蔽手法在常规代码或只读资源中偷渡的小型加密 Shellcode、压缩 Payload 或嵌入式配置。
 _Avoid_: EntropySlice (熵切片), SuspiciousSegment (可疑段), EncryptedRegion (加密区域)
 
+**ClrMetadata (CLR 托管程序画像)**:
+Windows PE 二进制中通过数据目录项索引 14（IMAGE_DIRECTORY_ENTRY_COM_DESCRIPTOR）与 ECMA-335 BSJB 签名识别的 .NET 托管程序画像，包含是否托管（`is_managed`）、运行时标识（`runtime`，如 '.NET CLR'）、目标 CLR 运行时版本（如 'v4.0.30319'）以及面向 AI Agent 的专属转译反编译引导（如重定向至 ILSpy / dnSpy），用于明确区分原生 C/C++ 机器码与 CIL 字节码，防止陷入无效的原生汇编与控制流分析。
+_Avoid_: DotNetHeader (DotNet头部), ManagedFlag (托管标志), BytecodeInfo (字节码信息)
+
+**FormatSniffer (轻量魔数格式嗅探器)**:
+在安全守卫格式校验链路中，针对非受支持二进制（非原生 PE/ELF/Mach-O）基于文件头部魔数（Magic Bytes）进行轻量特征嗅探的诊断引擎；精准识别 Adobe Flash SWF (FWS/CWS/ZWS)、Android APK/DEX (dex\\n/classes.dex)、WebAssembly (\\x00asm)、HTTP 流量归档 (HAR) 与底层抓包文件 (PCAP/PCAPNG)，并在 UNSUPPORTED_FORMAT 错误信封中提供具备可行动性的专用工具链重定向指引。
+_Avoid_: FileTypeDetector (文件类型检测器), ExtensionFilter (后缀过滤器), FormatValidator (格式校验器)
+
+
 

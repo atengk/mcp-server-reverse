@@ -673,3 +673,29 @@ class ForensicMetadata:
         @return dict[str, Any] 序列化字典对象
         """
         return asdict(self)
+
+
+@dataclass
+class ClrMetadata:
+    """Windows PE .NET CLR 托管程序与运行时指引画像
+
+    @author Ateng
+    @since 2026-10-15
+
+    @param is_managed 是否为 .NET 托管程序
+    @param runtime 运行时名称标识 (如 '.NET CLR', 未托管为 'Native')
+    @param clr_runtime_version CLR 目标运行时版本 (如 'v4.0.30319')
+    @param guidance 面向 AI Agent 的专用托管反编译引导建议
+    """
+
+    is_managed: bool
+    runtime: str = "Native"
+    clr_runtime_version: str | None = None
+    guidance: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        """将 CLR 画像序列化为字典对象
+
+        @return dict[str, Any] 序列化字典对象
+        """
+        return asdict(self)

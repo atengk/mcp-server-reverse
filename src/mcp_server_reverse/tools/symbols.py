@@ -28,6 +28,7 @@ from mcp_server_reverse.tools.session import get_session_or_error
 def get_sections_impl(
     session_id: str,
     session_store: SessionStore,
+    name_filter: str | None = None,
     detect_local_entropy: bool = True,
     window_size: int = 2048,
     step: int = 1024,
@@ -36,6 +37,7 @@ def get_sections_impl(
 
     @param session_id 目标会话唯一标识
     @param session_store 会话池实例
+    @param name_filter 可选的节区名称正则过滤
     @param detect_local_entropy 是否启用基于滑动窗口的细粒度局部高熵块探测 (缺省 True)
     @param window_size 滑动窗口字节尺寸 (缺省 2048)
     @param step 滑动步长 (缺省 1024)
@@ -51,6 +53,13 @@ def get_sections_impl(
         window_size=window_size,
         step=step,
     )
+    if name_filter:
+        try:
+            pattern = re.compile(name_filter, re.IGNORECASE)
+            sections = [s for s in sections if pattern.search(s.name)]
+        except re.error:
+            sections = [s for s in sections if name_filter.lower() in s.name.lower()]
+
     return create_response(
         session_id=session_id,
         summary=f"成功提取 {len(sections)} 个节区/段分布画像",

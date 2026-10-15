@@ -4,9 +4,10 @@
 @since 2026-10-13
 """
 
-from typing import Any
+from typing import Annotated, Any
 
 from mcp.server.mcpserver import MCPServer
+from pydantic import AliasChoices, Field
 
 from mcp_server_reverse.core.config import ServerConfig
 from mcp_server_reverse.core.locator import ToolLocator
@@ -127,11 +128,19 @@ def create_mcp_server(config: ServerConfig) -> MCPServer:
         description=(
             "枚举指定二进制分析会话的全量节区/段分布画像，输出虚拟地址、虚拟尺寸、"
             "文件物理偏移与大小、R/W/X 访问权限、香农熵 (0.0~8.0)、高熵加壳标记 (>= 7.2) "
-            "以及通过滑动窗口探测的局部异常高熵块列表"
+            "以及通过滑动窗口探测的局部异常高熵块列表；支持按节区名过滤 (name_filter)"
         ),
     )
     def get_sections(
         session_id: str,
+        name_filter: Annotated[
+            str | None,
+            Field(
+                default=None,
+                description="可选的节区名称正则过滤（兼容别名: name, filter, query, pattern）",
+                validation_alias=AliasChoices("name_filter", "name", "filter", "query", "pattern"),
+            ),
+        ] = None,
         detect_local_entropy: bool = True,
         window_size: int = 2048,
         step: int = 1024,
@@ -139,6 +148,7 @@ def create_mcp_server(config: ServerConfig) -> MCPServer:
         """提取指定二进制会话的全量节区分布画像与局部高熵块
 
         @param session_id 目标活跃分析会话标识
+        @param name_filter 可选的节区名称正则过滤
         @param detect_local_entropy 是否启用基于滑动窗口的细粒度局部高熵块探测 (缺省 True)
         @param window_size 滑动窗口字节尺寸 (缺省 2048)
         @param step 滑动步长 (缺省 1024)
@@ -147,6 +157,7 @@ def create_mcp_server(config: ServerConfig) -> MCPServer:
         return get_sections_impl(
             session_id=session_id,
             session_store=session_store,
+            name_filter=name_filter,
             detect_local_entropy=detect_local_entropy,
             window_size=window_size,
             step=step,
@@ -164,7 +175,14 @@ def create_mcp_server(config: ServerConfig) -> MCPServer:
     def get_imports(
         session_id: str,
         library_filter: str | None = None,
-        name_filter: str | None = None,
+        name_filter: Annotated[
+            str | None,
+            Field(
+                default=None,
+                description="函数符号名称正则过滤（兼容别名: name, filter, query, pattern）",
+                validation_alias=AliasChoices("name_filter", "name", "filter", "query", "pattern"),
+            ),
+        ] = None,
         category: str | None = None,
         offset: int = 0,
         limit: int = 50,
@@ -198,7 +216,14 @@ def create_mcp_server(config: ServerConfig) -> MCPServer:
     )
     def get_exports(
         session_id: str,
-        name_filter: str | None = None,
+        name_filter: Annotated[
+            str | None,
+            Field(
+                default=None,
+                description="符号名称正则过滤（兼容别名: name, filter, query, pattern）",
+                validation_alias=AliasChoices("name_filter", "name", "filter", "query", "pattern"),
+            ),
+        ] = None,
         offset: int = 0,
         limit: int = 50,
     ) -> dict[str, Any]:
@@ -229,7 +254,14 @@ def create_mcp_server(config: ServerConfig) -> MCPServer:
     )
     def get_symbols(
         session_id: str,
-        name_filter: str | None = None,
+        name_filter: Annotated[
+            str | None,
+            Field(
+                default=None,
+                description="符号名称正则过滤（兼容别名: name, filter, query, pattern）",
+                validation_alias=AliasChoices("name_filter", "name", "filter", "query", "pattern"),
+            ),
+        ] = None,
         symbol_type: str = "all",
         offset: int = 0,
         limit: int = 50,
@@ -262,7 +294,14 @@ def create_mcp_server(config: ServerConfig) -> MCPServer:
     )
     def search_strings(
         session_id: str,
-        pattern: str | None = None,
+        pattern: Annotated[
+            str | None,
+            Field(
+                default=None,
+                description="文本内容正则过滤（兼容别名: filter, query, keyword, search）",
+                validation_alias=AliasChoices("pattern", "filter", "query", "keyword", "search"),
+            ),
+        ] = None,
         min_length: int = 4,
         encoding: str = "all",
         ioc_category: str | None = None,
@@ -307,7 +346,18 @@ def create_mcp_server(config: ServerConfig) -> MCPServer:
     )
     def search_bytes_and_constants(
         session_id: str,
-        hex_pattern: str | None = None,
+        hex_pattern: Annotated[
+            str | None,
+            Field(
+                default=None,
+                description=(
+                    "类 IDA 十六进制通配符模式（兼容别名: pattern, filter, query, keyword, search）"
+                ),
+                validation_alias=AliasChoices(
+                    "hex_pattern", "pattern", "filter", "query", "keyword", "search"
+                ),
+            ),
+        ] = None,
         scan_crypto: bool = False,
         section_name: str | None = None,
         offset: int = 0,
@@ -342,7 +392,13 @@ def create_mcp_server(config: ServerConfig) -> MCPServer:
     )
     def convert_address(
         session_id: str,
-        address: str,
+        address: Annotated[
+            str,
+            Field(
+                description="待转换的地址或偏移量（兼容别名: target, va, offset, location）",
+                validation_alias=AliasChoices("address", "target", "va", "offset", "location"),
+            ),
+        ],
         address_type: str = "va",
     ) -> dict[str, Any]:
         """在 VA、RVA 与文件物理偏移之间双向精确换算
@@ -368,7 +424,13 @@ def create_mcp_server(config: ServerConfig) -> MCPServer:
     )
     def read_memory(
         session_id: str,
-        address: str,
+        address: Annotated[
+            str,
+            Field(
+                description="起始地址或偏移量（兼容别名: target, va, offset, location）",
+                validation_alias=AliasChoices("address", "target", "va", "offset", "location"),
+            ),
+        ],
         size: int = 64,
         address_type: str = "va",
     ) -> dict[str, Any]:
@@ -397,7 +459,15 @@ def create_mcp_server(config: ServerConfig) -> MCPServer:
     )
     def disassemble(
         session_id: str,
-        target: str,
+        target: Annotated[
+            str,
+            Field(
+                description=(
+                    "起始十六进制虚拟地址或符号名称（兼容别名: location, address, va, entry）"
+                ),
+                validation_alias=AliasChoices("target", "location", "address", "va", "entry"),
+            ),
+        ],
         count: int = 32,
         stop_at_ret: bool = True,
     ) -> dict[str, Any]:
@@ -426,7 +496,15 @@ def create_mcp_server(config: ServerConfig) -> MCPServer:
     )
     async def find_xrefs(
         session_id: str,
-        target: str,
+        target: Annotated[
+            str,
+            Field(
+                description=(
+                    "被引用的目标虚拟地址或符号名称（兼容别名: location, address, va, entry）"
+                ),
+                validation_alias=AliasChoices("target", "location", "address", "va", "entry"),
+            ),
+        ],
         xref_type: str = "all",
         offset: int = 0,
         limit: int = 50,
@@ -458,7 +536,13 @@ def create_mcp_server(config: ServerConfig) -> MCPServer:
     )
     async def decompile_function(
         session_id: str,
-        target: str,
+        target: Annotated[
+            str,
+            Field(
+                description="目标函数虚拟地址或符号名称（兼容别名: location, address, va, entry）",
+                validation_alias=AliasChoices("target", "location", "address", "va", "entry"),
+            ),
+        ],
         timeout_seconds: int = 30,
     ) -> dict[str, Any]:
         """调用外部反编译引擎对指定函数生成类 C 伪代码
@@ -558,7 +642,15 @@ def create_mcp_server(config: ServerConfig) -> MCPServer:
     )
     def analyze_cfg(
         session_id: str,
-        target: str,
+        target: Annotated[
+            str,
+            Field(
+                description=(
+                    "目标函数起始虚拟地址表达式或符号名称（兼容别名: location, address, va, entry）"
+                ),
+                validation_alias=AliasChoices("target", "location", "address", "va", "entry"),
+            ),
+        ],
         max_blocks: int = 100,
     ) -> dict[str, Any]:
         """抽取指定函数的单入口单出口基本块、控制流拓扑与 Mermaid 流程图

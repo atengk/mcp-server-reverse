@@ -85,3 +85,64 @@ def test_validate_unsupported_format(tmp_path: Path) -> None:
     assert res.is_valid is False
     assert res.resolved_path is None
     assert res.error_code == ErrorCode.UNSUPPORTED_FORMAT
+    assert "本服务仅支持" in (res.suggestion or "")
+
+
+def test_format_sniffer_swf(tmp_path: Path) -> None:
+    swf_file = tmp_path / "movie.swf"
+    swf_file.write_bytes(b"CWS\x08" + b"\x00" * 32)
+
+    guard = SecurityGuard()
+    res = guard.validate_target_file(str(swf_file), ServerConfig())
+
+    assert res.is_valid is False
+    assert "Adobe Flash SWF" in (res.error_message or "")
+    assert "FFDec" in (res.suggestion or "")
+
+
+def test_format_sniffer_dex_and_apk(tmp_path: Path) -> None:
+    dex_file = tmp_path / "classes.dex"
+    dex_file.write_bytes(b"dex\n035\x00" + b"\x00" * 32)
+
+    guard = SecurityGuard()
+    res = guard.validate_target_file(str(dex_file), ServerConfig())
+
+    assert res.is_valid is False
+    assert "Android APK / DEX" in (res.error_message or "")
+    assert "jadx" in (res.suggestion or "")
+
+
+def test_format_sniffer_wasm(tmp_path: Path) -> None:
+    wasm_file = tmp_path / "module.wasm"
+    wasm_file.write_bytes(b"\x00asm\x01\x00\x00\x00")
+
+    guard = SecurityGuard()
+    res = guard.validate_target_file(str(wasm_file), ServerConfig())
+
+    assert res.is_valid is False
+    assert "WebAssembly" in (res.error_message or "")
+    assert "wabt" in (res.suggestion or "")
+
+
+def test_format_sniffer_har(tmp_path: Path) -> None:
+    har_file = tmp_path / "network.har"
+    har_file.write_text('{"log": {"version": "1.2", "creator": {"name": "test"}, "entries": []}}')
+
+    guard = SecurityGuard()
+    res = guard.validate_target_file(str(har_file), ServerConfig())
+
+    assert res.is_valid is False
+    assert "HAR" in (res.error_message or "")
+    assert "traffic-inspector" in (res.suggestion or "")
+
+
+def test_format_sniffer_pcap(tmp_path: Path) -> None:
+    pcap_file = tmp_path / "dump.pcap"
+    pcap_file.write_bytes(b"\xd4\xc3\xb2\xa1\x02\x00\x04\x00")
+
+    guard = SecurityGuard()
+    res = guard.validate_target_file(str(pcap_file), ServerConfig())
+
+    assert res.is_valid is False
+    assert "PCAP" in (res.error_message or "")
+    assert "traffic-inspector" in (res.suggestion or "")
