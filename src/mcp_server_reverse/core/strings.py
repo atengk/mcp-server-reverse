@@ -225,7 +225,7 @@ def extract_strings(
     ):
         all_artifacts = cached_payload[1]
     else:
-        raw_bytes = session.file_path.read_bytes()
+        raw_bytes = session.read_effective_bytes(0, None)
         sections = extract_sections(session)
         target_min = min(min_length, 4)
 

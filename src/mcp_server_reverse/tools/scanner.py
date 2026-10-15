@@ -35,15 +35,15 @@ VALID_IOC_CATEGORIES: tuple[str, ...] = (
 
 def search_strings_impl(
     session_id: str,
-    pattern: str | None,
-    min_length: int,
-    encoding: str,
-    ioc_category: str | None,
-    section_name: str | None,
-    use_floss: bool,
-    offset: int,
-    limit: int,
-    session_store: SessionStore,
+    pattern: str | None = None,
+    min_length: int = 4,
+    encoding: str = "all",
+    ioc_category: str | None = None,
+    section_name: str | None = None,
+    use_floss: bool = False,
+    offset: int = 0,
+    limit: int = 50,
+    session_store: SessionStore | None = None,
     locator: ToolLocator | None = None,
 ) -> dict[str, Any]:
     """search_strings 核心业务实现
@@ -62,7 +62,8 @@ def search_strings_impl(
     @return dict[str, Any] 统一响应信封字典
     """
     # 1. 验证会话存在性
-    session, err_resp = get_session_or_error(session_id, session_store)
+    store = session_store if session_store is not None else SessionStore()
+    session, err_resp = get_session_or_error(session_id, store)
     if err_resp is not None or session is None:
         return err_resp or {}
 

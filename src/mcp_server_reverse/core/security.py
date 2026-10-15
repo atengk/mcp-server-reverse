@@ -52,6 +52,84 @@ class SecurityGuard:
     def __init__(self) -> None:
         pass
 
+    def validate_output_file(
+        self,
+        output_path_str: str | Path,
+        source_file_path: Path,
+        config: ServerConfig,
+        overwrite: bool = False,
+    ) -> SecurityValidationResult:
+        """校验导出输出文件路径：沙箱白名单、防原文件覆写与覆盖状态
+
+        @param output_path_str 目标输出文件路径字符串或 Path
+        @param source_file_path 当前会话的原始文件路径
+        @param config 当前服务端运行配置
+        @param overwrite 是否允许覆写已存在的输出文件 (默认 False)
+        @return SecurityValidationResult 强类型校验结果对象
+        """
+        raw_path = Path(output_path_str)
+
+        # 1. 规范化目标物理路径与源路径
+        try:
+            resolved_output = raw_path.resolve()
+            resolved_source = source_file_path.resolve()
+        except OSError as exc:
+            return SecurityValidationResult(
+                is_valid=False,
+                error_code=ErrorCode.INVALID_PARAMETER,
+                error_message=f"输出路径解析异常: {exc}",
+                suggestion="请检查传入的目标输出文件路径格式是否合法",
+            )
+
+        # 2. 绝对防自毁安全红线：无论 overwrite 是否为 True，严禁覆写原始输入样本文件
+        if resolved_output == resolved_source:
+            return SecurityValidationResult(
+                is_valid=False,
+                error_code=ErrorCode.FORBIDDEN_OVERWRITE_ORIGINAL,
+                error_message="安全守卫拦截: 严禁将修改后的二进制写回覆盖原始取证样本文件",
+                suggestion="请指定不同于原始文件的独立输出路径，保障原始样本只读保真",
+            )
+
+        # 3. 沙箱白名单目录防穿越校验
+        if config.allowed_dirs:
+            is_allowed = False
+            for allowed_dir in config.allowed_dirs:
+                try:
+                    resolved_allowed = allowed_dir.resolve()
+                    if resolved_output.is_relative_to(resolved_allowed):
+                        is_allowed = True
+                        break
+                except ValueError:
+                    continue
+
+            if not is_allowed:
+                allowed_str = ", ".join(str(d) for d in config.allowed_dirs)
+                return SecurityValidationResult(
+                    is_valid=False,
+                    error_code=ErrorCode.SANDBOX_PATH_FORBIDDEN,
+                    error_message=(
+                        f"安全沙箱拦截: 禁止将文件导出至白名单受控目录之外: {resolved_output}"
+                    ),
+                    suggestion=(
+                        f"当前允许写入的目录白名单为 [{allowed_str}]，"
+                        "请将输出路径设置在白名单目录下"
+                    ),
+                )
+
+        # 4. 文件已存在且未启用 overwrite 时的保护
+        if resolved_output.exists() and not overwrite:
+            return SecurityValidationResult(
+                is_valid=False,
+                error_code=ErrorCode.INVALID_PARAMETER,
+                error_message=f"目标输出文件已存在: {resolved_output}",
+                suggestion="若确定覆盖已有目标文件，请显式设置 overwrite=True",
+            )
+
+        return SecurityValidationResult(
+            is_valid=True,
+            resolved_path=resolved_output,
+        )
+
     def validate_target_file(
         self,
         file_path_str: str | Path,

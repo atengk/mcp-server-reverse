@@ -7,8 +7,11 @@
 @since 2026-10-14
 """
 
+import hashlib
+import os
 from typing import Any
 
+from mcp_server_reverse.core.config import ServerConfig
 from mcp_server_reverse.core.memory import convert_address_core
 from mcp_server_reverse.core.models import (
     ErrorCode,
@@ -17,6 +20,7 @@ from mcp_server_reverse.core.models import (
     create_error_response,
     create_response,
 )
+from mcp_server_reverse.core.security import SecurityGuard
 from mcp_server_reverse.core.session import SessionStore
 from mcp_server_reverse.tools.session import get_session_or_error
 
@@ -214,5 +218,82 @@ def revert_patch_impl(
     summary = (
         f"成功回滚补丁: {', '.join(reverted_ids) if reverted_ids else '无'}，"
         f"当前剩余激活补丁: {remaining_count} 条"
+    )
+    return create_response(summary=summary, data=data, session_id=session_id).to_dict()
+
+
+def export_patched_binary_impl(
+    session_id: str,
+    output_path: str,
+    overwrite: bool = False,
+    session_store: SessionStore | None = None,
+    security_guard: SecurityGuard | None = None,
+    config: ServerConfig | None = None,
+) -> dict[str, Any]:
+    """将应用全部激活内存虚拟补丁后的完整二进制有效镜像导出至磁盘文件
+
+    @param session_id 当前激活的二进制分析会话唯一标识
+    @param output_path 目标导出文件的物理路径
+    @param overwrite 是否允许覆盖已存在的文件 (默认 False)
+    @param session_store 全局 LRU 会话缓存池
+    @param security_guard 路径安全守卫实例
+    @param config 当前服务端运行配置
+    @return dict[str, Any] 符合 MCP 规范的响应信封字典
+    """
+    store = session_store if session_store is not None else SessionStore()
+    session, err_resp = get_session_or_error(session_id, store)
+    if err_resp is not None or session is None:
+        return err_resp or {}
+
+    guard = security_guard if security_guard is not None else SecurityGuard()
+    cfg = config if config is not None else ServerConfig()
+
+    val_res = guard.validate_output_file(
+        output_path_str=output_path,
+        source_file_path=session.file_path,
+        config=cfg,
+        overwrite=overwrite,
+    )
+    if not val_res.is_valid or val_res.resolved_path is None:
+        return create_error_response(
+            code=val_res.error_code or ErrorCode.INVALID_PARAMETER,
+            message=val_res.error_message or "目标导出路径校验未通过",
+            suggestion=val_res.suggestion or "请指定合法的输出路径",
+            session_id=session_id,
+        ).to_dict()
+
+    target_path = val_res.resolved_path
+
+    # 获取全量有效字节流并写入磁盘
+    patched_bytes = session.export_patched_bytes()
+    try:
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        target_path.write_bytes(patched_bytes)
+    except OSError as exc:
+        return create_error_response(
+            code=ErrorCode.INVALID_PARAMETER,
+            message=f"写入导出文件失败: {exc}",
+            suggestion="请检查目标目录是否存在且当前服务进程具备写权限",
+            session_id=session_id,
+        ).to_dict()
+
+    # 在 POSIX 环境下如果原始文件具备可执行权限，则赋予导出文件 0o755 权限
+    if os.name != "nt":
+        try:
+            if os.access(session.file_path, os.X_OK):
+                os.chmod(target_path, 0o755)
+        except OSError:
+            pass
+
+    active_count = len([p for p in session.patches if p.status == PatchStatus.ACTIVE.value])
+    data = {
+        "output_path": str(target_path),
+        "file_size": len(patched_bytes),
+        "patches_count": active_count,
+        "file_sha256": hashlib.sha256(patched_bytes).hexdigest(),
+    }
+    summary = (
+        f"成功将叠加了 {active_count} 处虚拟补丁的二进制镜像导出至: {target_path} "
+        f"(大小: {len(patched_bytes)} 字节)"
     )
     return create_response(summary=summary, data=data, session_id=session_id).to_dict()

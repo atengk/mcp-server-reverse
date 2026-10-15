@@ -26,6 +26,7 @@ from mcp_server_reverse.tools.disasm import (
 )
 from mcp_server_reverse.tools.mitigations import audit_mitigations_impl
 from mcp_server_reverse.tools.patch import (
+    export_patched_binary_impl,
     list_patches_impl,
     patch_memory_impl,
     revert_patch_impl,
@@ -631,6 +632,35 @@ def create_mcp_server(config: ServerConfig) -> MCPServer:
             session_id=session_id,
             patch_id=patch_id,
             session_store=session_store,
+        )
+
+    @server.tool(
+        name="export_patched_binary",
+        description=(
+            "将当前会话中叠加全部已激活内存虚拟补丁后的完整二进制有效镜像导出至磁盘文件；"
+            "受到受控白名单路径严格防护，绝对禁止覆写原始样本，"
+            "并在 POSIX 环境下自动继承原文件执行权限"
+        ),
+    )
+    def export_patched_binary(
+        session_id: str,
+        output_path: str,
+        overwrite: bool = False,
+    ) -> dict[str, Any]:
+        """将当前会话的修补二进制有效镜像流式导出到指定磁盘文件
+
+        @param session_id 目标活跃分析会话标识
+        @param output_path 目标导出文件的物理路径
+        @param overwrite 是否允许覆盖已存在的文件 (默认 False)
+        @return dict[str, Any] 导出结果响应字典
+        """
+        return export_patched_binary_impl(
+            session_id=session_id,
+            output_path=output_path,
+            overwrite=overwrite,
+            session_store=session_store,
+            security_guard=security_guard,
+            config=config,
         )
 
     @server.tool(

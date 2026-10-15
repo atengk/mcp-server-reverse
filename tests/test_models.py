@@ -23,6 +23,7 @@ def test_error_code_enum_has_all_nine_standards() -> None:
         "INVALID_PARAMETER",
         "EXTERNAL_TOOL_UNAVAILABLE",
         "EXTERNAL_TOOL_TIMEOUT",
+        "FORBIDDEN_OVERWRITE_ORIGINAL",
     }
     actual_codes = {code.value for code in ErrorCode}
     assert actual_codes == expected_codes

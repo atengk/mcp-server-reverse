@@ -5,6 +5,7 @@
 """
 
 import hashlib
+import json
 from pathlib import Path
 
 import pytest
@@ -241,3 +242,137 @@ def test_patch_memory_validation_and_errors(
     )
     assert err_rev["ok"] is False
     assert err_rev["error"]["code"] == ErrorCode.INVALID_PARAMETER.value
+
+
+def test_export_patched_binary_and_safety_guards(
+    active_store_and_sid: tuple[SessionStore, str, Path],
+    tmp_path: Path,
+) -> None:
+    from mcp_server_reverse.tools.patch import export_patched_binary_impl
+
+    store, sid, pe_file = active_store_and_sid
+    config = ServerConfig(allowed_dirs=[tmp_path])
+    guard = SecurityGuard()
+
+    # 1. 尝试覆盖原始文件，无论 overwrite=True 均应强行阻断
+    err_overwrite = export_patched_binary_impl(
+        session_id=sid,
+        output_path=str(pe_file),
+        overwrite=True,
+        session_store=store,
+        security_guard=guard,
+        config=config,
+    )
+    assert err_overwrite["ok"] is False
+    assert err_overwrite["error"]["code"] == ErrorCode.FORBIDDEN_OVERWRITE_ORIGINAL.value
+
+    # 2. 尝试导出到沙箱白名单外路径
+    outside_dir = tmp_path.parent / "outside_sandbox"
+    outside_dir.mkdir(exist_ok=True)
+    outside_file = outside_dir / "exported.exe"
+    err_outside = export_patched_binary_impl(
+        session_id=sid,
+        output_path=str(outside_file),
+        overwrite=False,
+        session_store=store,
+        security_guard=guard,
+        config=config,
+    )
+    assert err_outside["ok"] is False
+    assert err_outside["error"]["code"] == ErrorCode.SANDBOX_PATH_FORBIDDEN.value
+
+    # 3. 正常打补丁并导出到白名单新文件
+    patch_resp = patch_memory_impl(
+        session_id=sid,
+        address_or_offset="0x140001000",
+        patch_hex="90 90 CC",
+        address_type="va",
+        session_store=store,
+    )
+    assert patch_resp["ok"] is True
+
+    target_out = tmp_path / "exported_patched.exe"
+    success_export = export_patched_binary_impl(
+        session_id=sid,
+        output_path=str(target_out),
+        overwrite=False,
+        session_store=store,
+        security_guard=guard,
+        config=config,
+    )
+    assert success_export["ok"] is True
+    assert success_export["data"]["patches_count"] == 1
+    assert target_out.exists()
+
+    # 校验导出文件的内容确实包含补丁
+    exported_bytes = target_out.read_bytes()
+    assert b"\x90\x90\xcc" in exported_bytes
+    # 原始文件依然不变
+    assert b"\x90\x90\xcc" not in pe_file.read_bytes()
+
+
+def test_patch_aware_strings_extraction(
+    active_store_and_sid: tuple[SessionStore, str, Path],
+) -> None:
+    from mcp_server_reverse.tools.scanner import search_strings_impl
+
+    store, sid, pe_file = active_store_and_sid
+
+    # 1. 应用补丁写入特征字符串 "PWNED_BY_AGENT"
+    pwn_hex = "PWNED_BY_AGENT".encode("ascii").hex(" ")
+    patch_resp = patch_memory_impl(
+        session_id=sid,
+        address_or_offset="0x140001000",
+        patch_hex=pwn_hex,
+        address_type="va",
+        session_store=store,
+    )
+    assert patch_resp["ok"] is True
+
+    # 2. 调用 search_strings_impl 验证内存补丁透明穿透
+    str_resp = search_strings_impl(
+        session_id=sid,
+        pattern="PWNED_BY_AGENT",
+        session_store=store,
+    )
+    assert str_resp["ok"] is True
+    strings = str_resp["data"]["strings"]
+    assert len(strings) >= 1
+    assert "PWNED_BY_AGENT" in strings[0]["value"]
+
+
+@pytest.mark.asyncio
+async def test_server_export_patched_binary_e2e(tmp_path: Path) -> None:
+    from mcp_server_reverse.server import create_mcp_server
+
+    pe_file = tmp_path / "server_test.exe"
+    build_synthetic_pe64(pe_file)
+
+    config = ServerConfig(allowed_dirs=[tmp_path])
+    server = create_mcp_server(config)
+
+    # 1. 打开二进制
+    open_res = await server.call_tool("open_binary", {"file_path": str(pe_file)})
+    open_payload = json.loads(open_res.content[0].text)
+    assert open_payload["ok"] is True
+    sid = open_payload["session_id"]
+
+    # 2. 打补丁
+    patch_res = await server.call_tool(
+        "patch_memory",
+        {"session_id": sid, "address_or_offset": "0x140001000", "patch_hex": "CC CC CC"},
+    )
+    patch_payload = json.loads(patch_res.content[0].text)
+    assert patch_payload["ok"] is True
+
+    # 3. 导出到目标文件
+    out_file = tmp_path / "server_exported.exe"
+    exp_res = await server.call_tool(
+        "export_patched_binary",
+        {"session_id": sid, "output_path": str(out_file)},
+    )
+    exp_payload = json.loads(exp_res.content[0].text)
+    assert exp_payload["ok"] is True
+    assert exp_payload["data"]["patches_count"] == 1
+    assert out_file.exists()
+    assert b"\xcc\xcc\xcc" in out_file.read_bytes()

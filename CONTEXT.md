@@ -84,5 +84,18 @@ _Avoid_: DotNetHeader (DotNet头部), ManagedFlag (托管标志), BytecodeInfo (
 在安全守卫格式校验链路中，针对非受支持二进制（非原生 PE/ELF/Mach-O）基于文件头部魔数（Magic Bytes）进行轻量特征嗅探的诊断引擎；精准识别 Adobe Flash SWF (FWS/CWS/ZWS)、Android APK/DEX (dex\\n/classes.dex)、WebAssembly (\\x00asm)、HTTP 流量归档 (HAR) 与底层抓包文件 (PCAP/PCAPNG)，并在 UNSUPPORTED_FORMAT 错误信封中提供具备可行动性的专用工具链重定向指引。
 _Avoid_: FileTypeDetector (文件类型检测器), ExtensionFilter (后缀过滤器), FormatValidator (格式校验器)
 
+**BinaryDiff (二进制差异画像)**:
+跨两个活跃 `BinarySession` 提取的结构化跨样本比对画像，包含文件级与加固机制变动、节区尺寸与香农熵浮动（`entropy_delta`）、敏感导入导出 API 的增删集合、函数符号级重定位与代码变更统计，以及基于 SSDEEP 模糊哈希计算的 0~100 同源相似度得分；用于 1-Day 漏洞补丁分析与恶意软件家族谱系变种溯源。
+_Avoid_: PatchDiff (补丁差异), FileCompare (文件比较), TextDiff (文本差异)
+
+**DeobfuscatedString (解混淆字符串制品)**:
+针对二进制可疑数据区通过单字节 XOR 穷举变换（0x01~0xFF）或 Base64 自动识别解码出的隐藏文本工件，包含解码还原的明文内容、所使用的变换密钥（如 `xor_key: 0x5A`）、在原物理镜像中的文件偏移与虚拟地址（VA），以及命中的 IOC 威胁情报分类标签。
+_Avoid_: DecodedText (解码文本), PlaintextBuffer (明文缓冲区), HiddenString (隐藏字符串)
+
+**ThumbMode (ARM Thumb 紧凑指令模式)**:
+ARM 32 位架构特有的 16 位 / 32 位变长指令集执行模式；在 Capstone 静态反汇编时，根据目标虚拟地址（VA）的最低有效位（LSB = 1，如 `0x10001` 指向 `0x10000` Thumb 代码）或显式参数动态切换 `CS_MODE_THUMB`，避免将 Thumb 机器码误按 32 位 ARM 模式解析而导致反汇编乱码与分析中断。
+_Avoid_: Arm16 (ARM16), CompactInstruction (紧凑指令), ThumbFlag (Thumb标志)
+
+
 
 

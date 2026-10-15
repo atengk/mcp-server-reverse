@@ -105,6 +105,13 @@ class BinarySession:
 
         return bytes(chunk)
 
+    def export_patched_bytes(self) -> bytes:
+        """获取叠加当前全部激活虚拟补丁后的完整二进制有效字节数据
+
+        @return bytes 完整有效二进制镜像数据
+        """
+        return self.read_effective_bytes(0, None)
+
     def apply_patch(self, patch: PatchRecord, patch_bytes: bytes) -> None:
         """在会话中应用一条内存虚拟补丁并更新写时复制覆写层
 
@@ -117,6 +124,7 @@ class BinarySession:
         for i, b in enumerate(patch_bytes):
             self._patch_overlay[patch.file_offset + i] = b
         self._xref_index = None
+        self.strings_cache = None
         self.touch()
 
     def revert_patch(self, patch_id: str | None = None) -> list[str]:
@@ -134,6 +142,7 @@ class BinarySession:
                     reverted.append(p.patch_id)
             self._patch_overlay.clear()
             self._xref_index = None
+            self.strings_cache = None
             self.touch()
             return reverted
 
