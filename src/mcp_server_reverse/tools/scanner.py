@@ -18,7 +18,7 @@ from mcp_server_reverse.core.models import (
 )
 from mcp_server_reverse.core.scanner import scan_crypto_signatures, search_hex_pattern
 from mcp_server_reverse.core.session import SessionStore
-from mcp_server_reverse.core.strings import extract_strings
+from mcp_server_reverse.core.strings import extract_deobfuscated_strings, extract_strings
 from mcp_server_reverse.tools.session import get_session_or_error
 
 VALID_ENCODINGS: tuple[str, ...] = ("ascii", "utf16le", "all")
@@ -41,6 +41,9 @@ def search_strings_impl(
     ioc_category: str | None = None,
     section_name: str | None = None,
     use_floss: bool = False,
+    xor_scan: bool = False,
+    xor_key: int | None = None,
+    detect_base64: bool = False,
     offset: int = 0,
     limit: int = 50,
     session_store: SessionStore | None = None,
@@ -55,6 +58,9 @@ def search_strings_impl(
     @param ioc_category 7 类威胁情报标签之一
     @param section_name 所属节区过滤
     @param use_floss 是否启用 floss 解码
+    @param xor_scan 是否启用 0x01~0xFF 单字节 XOR 盲扫
+    @param xor_key 指定的单字节 XOR 密钥数值 (0~255)
+    @param detect_base64 是否自动识别与解码 Base64 文本块
     @param offset 分页偏移量
     @param limit 单页最大条目数
     @param session_store 会话池实例
@@ -85,6 +91,22 @@ def search_strings_impl(
             session_id=session_id,
         ).to_dict()
 
+    if xor_key is not None and not (0 <= xor_key <= 255):
+        return create_error_response(
+            code=ErrorCode.INVALID_PARAMETER,
+            message=f"非法的 XOR 密钥数值: {xor_key}，必须位于 0~255 范围内",
+            suggestion="请提供 0~255 之间的单字节整数密钥",
+            session_id=session_id,
+        ).to_dict()
+
+    if xor_scan and xor_key is None and not pattern:
+        return create_error_response(
+            code=ErrorCode.INVALID_PARAMETER,
+            message="启用 xor_scan 全量盲扫时必须提供 pattern 过滤关键字以防算力耗尽与噪声泛滥",
+            suggestion="请指定待检索的关键特征，如 pattern='http' 或 pattern='powershell'",
+            session_id=session_id,
+        ).to_dict()
+
     # 3. 提取与正则过滤防御
     safe_offset = max(0, offset)
     safe_limit = max(1, min(limit, 500))
@@ -110,6 +132,27 @@ def search_strings_impl(
             session_id=session_id,
         ).to_dict()
 
+    # 4. 执行反混淆提取 (XOR / Base64)
+    deobfuscated_items: list[dict[str, Any]] = []
+    if xor_scan or (xor_key is not None) or detect_base64:
+        try:
+            deobf_objs = extract_deobfuscated_strings(
+                session=session,
+                xor_scan=xor_scan,
+                xor_key=xor_key,
+                detect_base64=detect_base64,
+                pattern=pattern,
+                min_length=min_length,
+            )
+            deobfuscated_items = [d.to_dict() for d in deobf_objs]
+        except Exception as exc:
+            return create_error_response(
+                code=ErrorCode.INVALID_PARAMETER,
+                message=f"反混淆提取异常: {exc}",
+                suggestion="请检查输入的 pattern 或参数格式",
+                session_id=session_id,
+            ).to_dict()
+
     pagination = PaginationInfo(
         total=total,
         offset=safe_offset,
@@ -118,17 +161,23 @@ def search_strings_impl(
     )
 
     summary_text = f"成功检索到 {total} 条匹配字符串（当前返回 {len(items)} 条）"
+    if xor_scan or (xor_key is not None) or detect_base64:
+        summary_text += f"，并提取出 {len(deobfuscated_items)} 条反混淆/解码字符串"
     if floss_status and "软降级" in floss_status:
         summary_text += f"；[提示] {floss_status}"
+
+    data_payload: dict[str, Any] = {
+        "strings": [s.to_dict() for s in items],
+        "floss_status": floss_status,
+    }
+    if xor_scan or (xor_key is not None) or detect_base64:
+        data_payload["deobfuscated_strings"] = deobfuscated_items
 
     return create_response(
         session_id=session_id,
         summary=summary_text,
         pagination=pagination,
-        data={
-            "strings": [s.to_dict() for s in items],
-            "floss_status": floss_status,
-        },
+        data=data_payload,
     ).to_dict()
 
 

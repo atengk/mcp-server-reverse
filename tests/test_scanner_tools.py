@@ -296,3 +296,103 @@ def test_scanner_tools_elf64(tmp_path: Path) -> None:
     )
     assert crypto_resp["ok"] is True
     assert any(s["name"] == "AES S-Box" for s in crypto_resp["data"]["crypto_signatures"])
+
+
+def test_search_strings_xor_and_base64_deobfuscation(tmp_path: Path) -> None:
+    from mcp_server_reverse.tools.patch import patch_memory_impl
+
+    pe_file = tmp_path / "target_deobf.exe"
+    build_synthetic_pe64(pe_file)
+
+    config = ServerConfig()
+    store = SessionStore()
+    open_resp = open_binary_impl(
+        file_path=str(pe_file),
+        target_arch=None,
+        session_store=store,
+        security_guard=SecurityGuard(),
+        parser=BinaryParser(),
+        config=config,
+    )
+    sid = open_resp["session_id"]
+
+    # 1. 植入以 0x5A 异或加密的 "super_secret_token"
+    plain_xor = b"super_secret_token"
+    enc_xor = bytes(b ^ 0x5A for b in plain_xor)
+    patch_memory_impl(
+        session_id=sid,
+        address_or_offset="0x140001000",
+        patch_hex=enc_xor.hex(" "),
+        session_store=store,
+    )
+
+    # 1.1 指定 xor_key=0x5A 提取
+    res_key = search_strings_impl(
+        session_id=sid,
+        xor_key=0x5A,
+        session_store=store,
+    )
+    assert res_key["ok"] is True
+    deobf_list = res_key["data"]["deobfuscated_strings"]
+    assert any("super_secret_token" in d["value"] for d in deobf_list)
+    assert any(d["xor_key"] == 0x5A for d in deobf_list)
+
+    # 2. 植入以 0x33 异或加密的 URL "https://c2.evil.com/beacon"
+    url_plain = b"https://c2.evil.com/beacon"
+    url_enc = bytes(b ^ 0x33 for b in url_plain)
+    patch_memory_impl(
+        session_id=sid,
+        address_or_offset="0x140001100",
+        patch_hex=url_enc.hex(" "),
+        session_store=store,
+    )
+
+    # 2.1 未知 key，启用 xor_scan=True 盲扫并带 pattern="evil.com"
+    res_blind = search_strings_impl(
+        session_id=sid,
+        xor_scan=True,
+        pattern="evil.com",
+        session_store=store,
+    )
+    assert res_blind["ok"] is True
+    blind_list = res_blind["data"]["deobfuscated_strings"]
+    assert len(blind_list) >= 1
+    hit = next((d for d in blind_list if "evil.com" in d["value"]), None)
+    assert hit is not None
+    assert hit["xor_key"] == 0x33
+    assert hit["ioc_category"] == "url"
+
+    # 2.2 启用 xor_scan=True 但未提供 pattern，触发防爆拦截
+    res_no_pat = search_strings_impl(
+        session_id=sid,
+        xor_scan=True,
+        pattern=None,
+        session_store=store,
+    )
+    assert res_no_pat["ok"] is False
+    assert res_no_pat["error"]["code"] == ErrorCode.INVALID_PARAMETER.value
+
+    # 3. 植入 Base64 编码的 "powershell.exe -enc AAAA"
+    # b"powershell.exe -enc AAAA" 的 base64 为 "cG93ZXJzaGVsbC5leGUgLWVuYyBBQUFB"
+    b64_str = b"cG93ZXJzaGVsbC5leGUgLWVuYyBBQUFB"
+    patch_b64_res = patch_memory_impl(
+        session_id=sid,
+        address_or_offset="0x140002100",
+        patch_hex=b64_str.hex(" "),
+        session_store=store,
+    )
+    assert patch_b64_res["ok"] is True
+
+    # 3.1 启用 detect_base64=True 自动识别与解码
+    res_b64 = search_strings_impl(
+        session_id=sid,
+        detect_base64=True,
+        session_store=store,
+    )
+    assert res_b64["ok"] is True
+    b64_deobf = res_b64["data"]["deobfuscated_strings"]
+    assert any("powershell.exe" in d["value"] for d in b64_deobf)
+    b64_hit = next((d for d in b64_deobf if "powershell.exe" in d["value"]), None)
+    assert b64_hit is not None
+    assert b64_hit["method"] == "base64"
+    assert b64_hit["ioc_category"] == "suspicious_cmd"

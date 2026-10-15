@@ -290,7 +290,8 @@ def create_mcp_server(config: ServerConfig) -> MCPServer:
         description=(
             "提取二进制文件全量 ASCII 与 UTF-16LE 字符串，映射所属节区与虚拟地址；"
             "内置 7 类威胁情报 IOC 自动标记 (url, ipv4, filepath, registry, email, "
-            "crypto_or_key, suspicious_cmd)，支持正则过滤与外部 floss 软降级"
+            "crypto_or_key, suspicious_cmd)，支持单字节 XOR 穷举/指定密钥解密、"
+            "Base64 自动识别解码与外部 floss 软降级"
         ),
     )
     def search_strings(
@@ -308,10 +309,34 @@ def create_mcp_server(config: ServerConfig) -> MCPServer:
         ioc_category: str | None = None,
         section_name: str | None = None,
         use_floss: bool = False,
+        xor_scan: Annotated[
+            bool,
+            Field(
+                default=False,
+                description="是否启用 0x01~0xFF 单字节 XOR 暴力盲扫（需同时提供 pattern 过滤）",
+                validation_alias=AliasChoices("xor_scan", "xor", "scan_xor"),
+            ),
+        ] = False,
+        xor_key: Annotated[
+            int | None,
+            Field(
+                default=None,
+                description="指定的单字节 XOR 异或解密密钥 (0~255)",
+                validation_alias=AliasChoices("xor_key", "key"),
+            ),
+        ] = None,
+        detect_base64: Annotated[
+            bool,
+            Field(
+                default=False,
+                description="是否自动识别并解码二进制中的合法 Base64 编码文本块",
+                validation_alias=AliasChoices("detect_base64", "base64", "b64"),
+            ),
+        ] = False,
         offset: int = 0,
         limit: int = 50,
     ) -> dict[str, Any]:
-        """提取并检索二进制字符串及 IOC 威胁情报标签
+        """提取并检索二进制字符串及 IOC 威胁情报标签与反混淆解码
 
         @param session_id 目标活跃分析会话标识
         @param pattern 文本内容正则过滤
@@ -320,6 +345,9 @@ def create_mcp_server(config: ServerConfig) -> MCPServer:
         @param ioc_category 7 类威胁情报标签过滤
         @param section_name 所属节区过滤
         @param use_floss 是否启用外部 floss 解码 (未安装时自动软降级)
+        @param xor_scan 是否启用 0x01~0xFF 单字节 XOR 盲扫
+        @param xor_key 指定的单字节 XOR 密钥数值 (0~255)
+        @param detect_base64 是否自动识别与解码 Base64 文本块
         @param offset 分页偏移量
         @param limit 单页最大条数
         @return dict[str, Any] 字符串检索响应字典
@@ -332,6 +360,9 @@ def create_mcp_server(config: ServerConfig) -> MCPServer:
             ioc_category=ioc_category,
             section_name=section_name,
             use_floss=use_floss,
+            xor_scan=xor_scan,
+            xor_key=xor_key,
+            detect_base64=detect_base64,
             offset=offset,
             limit=limit,
             session_store=session_store,

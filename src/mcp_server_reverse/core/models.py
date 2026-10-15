@@ -200,6 +200,37 @@ class StringArtifact:
 
 
 @dataclass
+class DeobfuscatedString:
+    """经单字节 XOR 或 Base64 反混淆解码还原的字符串工件
+
+    @param value 解密/解码后的明文字符串
+    @param method 混淆还原算法类型 ("xor", "base64")
+    @param xor_key 异或密钥数值 (0x01~0xFF，仅 method="xor" 时有效)
+    @param file_offset 原始密文在文件中的起始物理偏移量
+    @param virtual_address 映射后的虚拟地址十六进制字符串
+    @param section 所属节区名称
+    @param ioc_category 自动标记的 IOC 威胁情报标签
+    @param length 明文字符串长度
+    """
+
+    value: str
+    method: str
+    xor_key: int | None = None
+    file_offset: int = 0
+    virtual_address: str = "0x0"
+    section: str | None = None
+    ioc_category: str | None = None
+    length: int = 0
+
+    def to_dict(self) -> dict[str, Any]:
+        """将反混淆字符串工件序列化为字典对象
+
+        @return dict[str, Any] 序列化字典对象
+        """
+        return asdict(self)
+
+
+@dataclass
 class CryptoSignature:
     """扫描匹配到的密码学特征魔数或常量表
 

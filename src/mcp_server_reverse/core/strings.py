@@ -6,6 +6,7 @@
 @since 2026-10-13
 """
 
+import base64
 import ipaddress
 import logging
 import re
@@ -15,6 +16,7 @@ from pathlib import Path
 from mcp_server_reverse.core.inspection import extract_sections
 from mcp_server_reverse.core.locator import ToolLocator
 from mcp_server_reverse.core.models import (
+    DeobfuscatedString,
     SectionProfile,
     StringArtifact,
     resolve_offset_to_section_and_va,
@@ -291,3 +293,181 @@ def extract_strings(
     paged = matched_artifacts[safe_offset : safe_offset + safe_limit] if safe_offset < total else []
 
     return paged, total, floss_status
+
+
+BASE64_PATTERN: re.Pattern[bytes] = re.compile(rb"[A-Za-z0-9+/]{8,}={0,2}")
+
+
+def _expand_printable_xor_span(
+    data: bytes, key: int, match_start: int, match_end: int
+) -> tuple[int, str]:
+    """以匹配区间为锚点，向左和向右扩展最大连续可打印 ASCII 范围"""
+    left = match_start
+    while left > 0 and (0x20 <= (data[left - 1] ^ key) <= 0x7E):
+        left -= 1
+
+    right = match_end
+    data_len = len(data)
+    while right < data_len and (0x20 <= (data[right] ^ key) <= 0x7E):
+        right += 1
+
+    text = bytes(b ^ key for b in data[left:right]).decode("ascii", errors="ignore")
+    return left, text
+
+
+def extract_xor_strings_with_pattern(
+    data: bytes,
+    key: int,
+    pattern: str,
+    min_length: int = 4,
+) -> list[tuple[int, str, int]]:
+    """针对指定密钥搜索命中了 pattern 关键字的 XOR 字符串片段并扩展还原"""
+    pat_bytes = pattern.encode("utf-8", errors="ignore")
+    if not pat_bytes:
+        return []
+
+    results: list[tuple[int, str, int]] = []
+    xor_pat = bytes(b ^ key for b in pat_bytes)
+
+    start_pos = 0
+    data_len = len(data)
+    while start_pos < data_len:
+        pos = data.find(xor_pat, start_pos)
+        if pos == -1:
+            break
+        off, expanded = _expand_printable_xor_span(data, key, pos, pos + len(xor_pat))
+        if len(expanded) >= min_length:
+            results.append((off, expanded, key))
+        start_pos = pos + len(xor_pat)
+        if len(results) >= 50:
+            break
+
+    return results
+
+
+def extract_xor_strings_known_key(
+    data: bytes,
+    key: int,
+    min_length: int = 4,
+    pattern: str | None = None,
+) -> list[tuple[int, str, int]]:
+    """对已知 key 进行异或解密并提取 ASCII 字符串"""
+    if pattern:
+        return extract_xor_strings_with_pattern(data, key, pattern, min_length)
+
+    xor_bytes = bytes(b ^ key for b in data)
+    raw_ascii = extract_ascii_strings(xor_bytes, min_length=min_length)
+    return [(off, s_val, key) for off, s_val in raw_ascii]
+
+
+def extract_base64_strings(
+    data: bytes,
+    min_length: int = 4,
+    pattern: str | None = None,
+) -> list[tuple[int, str]]:
+    """从二进制数据流中识别并解码合法的 Base64 文本块"""
+    results: list[tuple[int, str]] = []
+    reg = re.compile(pattern, re.IGNORECASE) if pattern else None
+
+    for m in BASE64_PATTERN.finditer(data):
+        b64_raw = m.group(0)
+        try:
+            decoded = base64.b64decode(b64_raw, validate=True)
+        except Exception:
+            continue
+
+        if len(decoded) < min_length:
+            continue
+
+        printable_count = sum(1 for b in decoded if 0x20 <= b <= 0x7E or b in (0x09, 0x0A, 0x0D))
+        if printable_count / len(decoded) < 0.85:
+            continue
+
+        try:
+            text = decoded.decode("utf-8", errors="ignore").strip()
+        except Exception:
+            continue
+
+        if len(text) < min_length:
+            continue
+
+        if reg and not reg.search(text):
+            continue
+
+        results.append((m.start(), text))
+        if len(results) >= 100:
+            break
+
+    return results
+
+
+def extract_deobfuscated_strings(
+    session: BinarySession,
+    xor_scan: bool = False,
+    xor_key: int | None = None,
+    detect_base64: bool = False,
+    pattern: str | None = None,
+    min_length: int = 4,
+) -> list[DeobfuscatedString]:
+    """执行单字节 XOR 异或与 Base64 反混淆提取并构造 DeobfuscatedString 工件"""
+    raw_bytes = session.read_effective_bytes(0, None)
+    sections = extract_sections(session)
+    results: list[DeobfuscatedString] = []
+
+    # 1. 处理单字节 XOR
+    if xor_key is not None:
+        hits = extract_xor_strings_known_key(raw_bytes, xor_key, min_length, pattern)
+        for off, val, k in hits:
+            sec_name, va_str = resolve_offset_to_section_and_va(off, sections, session.image_base)
+            results.append(
+                DeobfuscatedString(
+                    value=val,
+                    method="xor",
+                    xor_key=k,
+                    file_offset=off,
+                    virtual_address=va_str,
+                    section=sec_name,
+                    ioc_category=classify_ioc(val),
+                    length=len(val),
+                )
+            )
+    elif xor_scan and pattern:
+        for k in range(1, 256):
+            hits = extract_xor_strings_with_pattern(raw_bytes, k, pattern, min_length)
+            for off, val, used_k in hits:
+                sec_name, va_str = resolve_offset_to_section_and_va(
+                    off, sections, session.image_base
+                )
+                results.append(
+                    DeobfuscatedString(
+                        value=val,
+                        method="xor",
+                        xor_key=used_k,
+                        file_offset=off,
+                        virtual_address=va_str,
+                        section=sec_name,
+                        ioc_category=classify_ioc(val),
+                        length=len(val),
+                    )
+                )
+
+    # 2. 处理 Base64 解码
+    if detect_base64:
+        b64_hits = extract_base64_strings(raw_bytes, min_length, pattern)
+        for off, val in b64_hits:
+            sec_name, va_str = resolve_offset_to_section_and_va(off, sections, session.image_base)
+            results.append(
+                DeobfuscatedString(
+                    value=val,
+                    method="base64",
+                    xor_key=None,
+                    file_offset=off,
+                    virtual_address=va_str,
+                    section=sec_name,
+                    ioc_category=classify_ioc(val),
+                    length=len(val),
+                )
+            )
+
+    results.sort(key=lambda x: x.file_offset)
+    return results
