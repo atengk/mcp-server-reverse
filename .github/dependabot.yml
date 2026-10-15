@@ -57,6 +57,9 @@ updates:
       include: "scope"
     labels:
       - "dependencies"
+    ignore:
+      - dependency-name: "python"
+        versions: [">= 3.13"]
     groups:
       docker-images:
         patterns:
