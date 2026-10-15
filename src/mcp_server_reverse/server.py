@@ -17,6 +17,7 @@ from mcp_server_reverse.core.security import SecurityGuard
 from mcp_server_reverse.core.session import SessionStore
 from mcp_server_reverse.tools.capabilities import get_capabilities_impl
 from mcp_server_reverse.tools.cfg import analyze_cfg_impl
+from mcp_server_reverse.tools.diff import diff_sessions_impl
 from mcp_server_reverse.tools.disasm import (
     convert_address_impl,
     decompile_function_impl,
@@ -812,6 +813,45 @@ def create_mcp_server(
             session_id=session_id,
             rule_text=rule_text,
             rule_file=rule_file,
+            session_store=session_store,
+        )
+
+    @server.tool(
+        name="diff_sessions",
+        description=(
+            "对比两个活跃二进制分析会话的二阶结构化差异画像，输出同源相似度分值 (0~100)、"
+            "节区拓扑与香农熵差异 (entropy_delta)、导入导出敏感 API 增删集合及公共符号基址偏移推导"
+        ),
+    )
+    def diff_sessions(
+        session_id_a: Annotated[
+            str,
+            Field(
+                description="基准会话唯一标识（兼容别名: session_a, source, source_session）",
+                validation_alias=AliasChoices(
+                    "session_id_a", "session_a", "source", "source_session"
+                ),
+            ),
+        ],
+        session_id_b: Annotated[
+            str,
+            Field(
+                description="比对目标会话唯一标识（兼容别名: session_b, target, target_session）",
+                validation_alias=AliasChoices(
+                    "session_id_b", "session_b", "target", "target_session"
+                ),
+            ),
+        ],
+    ) -> dict[str, Any]:
+        """对比两个活跃分析会话的二阶结构化差异画像
+
+        @param session_id_a 基准分析会话标识
+        @param session_id_b 比对目标分析会话标识
+        @return dict[str, Any] 跨会话差异画像响应字典
+        """
+        return diff_sessions_impl(
+            session_id_a=session_id_a,
+            session_id_b=session_id_b,
             session_store=session_store,
         )
 

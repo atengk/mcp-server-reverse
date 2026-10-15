@@ -220,9 +220,10 @@ async def test_mcp_server_registers_all_tools() -> None:
         "analyze_cfg",
         "audit_mitigations",
         "scan_yara",
+        "diff_sessions",
     }
     assert tool_names == expected_tools
-    assert len(tool_names) == 22
+    assert len(tool_names) == 23
 
 
 @pytest.mark.asyncio

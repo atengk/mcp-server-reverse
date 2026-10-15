@@ -731,3 +731,39 @@ class ClrMetadata:
         @return dict[str, Any] 序列化字典对象
         """
         return asdict(self)
+
+
+@dataclass
+class BinaryDiff:
+    """跨会话二阶结构化差异画像
+
+    @author Ateng
+    @since 2026-10-15
+
+    @param session_id_a 基准会话标识
+    @param session_id_b 目标比对会话标识
+    @param similarity_score SSDEEP 模糊哈希同源相似度分值 (0 ~ 100)
+    @param file_info 基础文件信息对比 (架构、位宽、端序等一致性)
+    @param mitigations 漏洞缓解机制防御配置变化对比
+    @param sections 节区拓扑、尺寸增减与香农熵差异 (含新增异常高熵节区)
+    @param imports 导入表增删 API 集合及高危敏感行为标签
+    @param exports 导出表增删 API 集合
+    @param symbols 公共符号虚拟地址重定位偏移推导及独有函数列表
+    """
+
+    session_id_a: str
+    session_id_b: str
+    similarity_score: int
+    file_info: dict[str, Any] = field(default_factory=dict)
+    mitigations: dict[str, Any] = field(default_factory=dict)
+    sections: dict[str, Any] = field(default_factory=dict)
+    imports: dict[str, Any] = field(default_factory=dict)
+    exports: dict[str, Any] = field(default_factory=dict)
+    symbols: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        """将差异画像序列化为字典对象
+
+        @return dict[str, Any] 序列化字典对象
+        """
+        return asdict(self)
