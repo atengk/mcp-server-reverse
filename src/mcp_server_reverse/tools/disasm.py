@@ -14,6 +14,7 @@ from mcp_server_reverse.core.config import ServerConfig
 from mcp_server_reverse.core.disasm import (
     build_xref_index,
     disassemble_at,
+    group_xrefs_by_function,
     query_xrefs,
 )
 from mcp_server_reverse.core.locator import ToolLocator
@@ -224,11 +225,12 @@ async def find_xrefs_impl(
     offset: int,
     limit: int,
     session_store: SessionStore,
+    group_by: str = "none",
 ) -> dict[str, Any]:
     """find_xrefs 异步核心业务实现
 
     首次调用时通过 asyncio.to_thread 在后台线程构建会话级惰性交叉引用索引 (_xref_index)，
-    后续同会话查询直接 O(1) 内存命中。
+    后续同会话查询直接 O(1) 内存命中。支持 group_by="function" 函数级折叠聚合。
 
     @param session_id 目标活跃会话标识
     @param target 被引用的目标虚拟地址或符号名称
@@ -236,6 +238,7 @@ async def find_xrefs_impl(
     @param offset 分页偏移量
     @param limit 单页最大返回数
     @param session_store 会话池实例
+    @param group_by 聚合折叠维度 ("none", "function")
     @return dict[str, Any] 统一响应信封字典
     """
     session, err_resp = get_session_or_error(session_id, session_store)
@@ -248,6 +251,17 @@ async def find_xrefs_impl(
             code=ErrorCode.INVALID_PARAMETER,
             message=f"不支持的 xref_type: '{xref_type}'",
             suggestion=f"xref_type 可选值为: {', '.join(VALID_XREF_TYPES)}",
+            session_id=session_id,
+        ).to_dict()
+
+    eff_group = group_by.lower().strip() if group_by else "none"
+    if eff_group not in ("none", "function"):
+        return create_error_response(
+            code=ErrorCode.INVALID_PARAMETER,
+            message=f"不支持的 group_by: '{group_by}'，可选值为 none, function",
+            suggestion=(
+                "请传入 group_by='none'（默认扁平列表）或 group_by='function'（按调用函数折叠聚合）"
+            ),
             session_id=session_id,
         ).to_dict()
 
@@ -267,6 +281,45 @@ async def find_xrefs_impl(
 
     safe_offset = max(0, offset)
     safe_limit = max(1, min(limit, 500))
+
+    if eff_group == "function":
+        all_items, total = query_xrefs(
+            session=session,
+            target_va=target_va,
+            xref_type=eff_type,
+            offset=0,
+            limit=100000,
+        )
+        grouped_funcs = group_xrefs_by_function(session=session, xrefs=all_items)
+        paged_groups = (
+            grouped_funcs[safe_offset : safe_offset + safe_limit]
+            if safe_offset < len(grouped_funcs)
+            else []
+        )
+        pagination = PaginationInfo(
+            total=len(grouped_funcs),
+            offset=safe_offset,
+            limit=safe_limit,
+            has_more=(safe_offset + len(paged_groups) < len(grouped_funcs)),
+        )
+        return create_response(
+            session_id=session_id,
+            summary=(
+                f"针对目标 0x{target_va:X} 共检索到 {total} 处交叉引用，"
+                f"归集折叠至 {len(grouped_funcs)} 个调用函数/节区"
+            ),
+            pagination=pagination,
+            data={
+                "target": str(target),
+                "target_address": f"0x{target_va:X}",
+                "group_by": "function",
+                "function_count": len(grouped_funcs),
+                "total_references": total,
+                "functions": paged_groups,
+                "grouped_xrefs": paged_groups,
+            },
+        ).to_dict()
+
     items, total = query_xrefs(
         session=session,
         target_va=target_va,

@@ -49,10 +49,14 @@ from mcp_server_reverse.tools.symbols import (
 from mcp_server_reverse.tools.yara import scan_yara_impl
 
 
-def create_mcp_server(config: ServerConfig) -> MCPServer:
+def create_mcp_server(
+    config: ServerConfig,
+    session_store: SessionStore | None = None,
+) -> MCPServer:
     """构建并初始化配置好全部 MCP 逆向工具的 MCPServer 实例
 
     @param config 当前服务端运行配置
+    @param session_store 可选的外部注入会话池实例 (若为 None 则自动创建)
     @return MCPServer 就绪的服务端实例
     """
     server = MCPServer(
@@ -62,7 +66,7 @@ def create_mcp_server(config: ServerConfig) -> MCPServer:
     )
 
     locator = ToolLocator()
-    session_store = SessionStore(max_sessions=config.max_sessions)
+    session_store = session_store or SessionStore(max_sessions=config.max_sessions)
     security_guard = SecurityGuard()
     parser = BinaryParser()
 
@@ -561,6 +565,14 @@ def create_mcp_server(config: ServerConfig) -> MCPServer:
             ),
         ],
         xref_type: str = "all",
+        group_by: Annotated[
+            str,
+            Field(
+                default="none",
+                description="聚合折叠维度 ('none' 为扁平列表, 'function' 按调用函数归集折叠)",
+                validation_alias=AliasChoices("group_by", "group", "mode"),
+            ),
+        ] = "none",
         offset: int = 0,
         limit: int = 50,
     ) -> dict[str, Any]:
@@ -569,6 +581,7 @@ def create_mcp_server(config: ServerConfig) -> MCPServer:
         @param session_id 目标活跃分析会话标识
         @param target 被引用的目标虚拟地址（如 '0x140002250'）或符号名称
         @param xref_type 交叉引用过滤类型 ('all', 'code', 'data')
+        @param group_by 聚合折叠维度 ('none', 'function')
         @param offset 分页偏移量
         @param limit 单页最大条数
         @return dict[str, Any] 交叉引用检索响应字典
@@ -580,6 +593,7 @@ def create_mcp_server(config: ServerConfig) -> MCPServer:
             offset=offset,
             limit=limit,
             session_store=session_store,
+            group_by=group_by,
         )
 
     @server.tool(

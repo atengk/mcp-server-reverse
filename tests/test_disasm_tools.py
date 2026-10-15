@@ -287,3 +287,123 @@ async def test_arm32_thumb_mode_auto_and_explicit(tmp_path: Path) -> None:
     assert conv_data_even["ok"] is True
     assert conv_data_even["data"]["va"] == "0x10000"
     assert conv_data_even["data"]["thumb_mode"] is True
+
+
+@pytest.mark.asyncio
+async def test_disasm_annotation_cache_lifecycle(tmp_path: Path) -> None:
+    from mcp_server_reverse.server import create_mcp_server
+    from tests.fixtures.synthetic import build_synthetic_pe64
+
+    def _unpack(res: Any) -> dict[str, Any]:
+        if hasattr(res, "content") and res.content:
+            return json.loads(res.content[0].text)
+        return res
+
+    pe_file = tmp_path / "target_cache.exe"
+    build_synthetic_pe64(pe_file)
+
+    store = SessionStore()
+    server = create_mcp_server(ServerConfig(), session_store=store)
+    open_res = await server.call_tool("open_binary", {"file_path": str(pe_file)})
+    sid = _unpack(open_res)["session_id"]
+
+    session = store.get(sid)
+    assert session is not None
+    assert session._annotation_cache is None
+
+    # 1. 首次反汇编，构建并命中缓存
+    dis_res = await server.call_tool(
+        "disassemble", {"session_id": sid, "target": "reverse_test_entry"}
+    )
+    assert _unpack(dis_res)["ok"] is True
+    assert session._annotation_cache is not None
+    cache_id = id(session._annotation_cache)
+
+    # 2. 二次反汇编，复用同内存实例缓存
+    dis_res2 = await server.call_tool(
+        "disassemble", {"session_id": sid, "target": "reverse_test_entry"}
+    )
+    assert _unpack(dis_res2)["ok"] is True
+    assert id(session._annotation_cache) == cache_id
+
+    # 3. 内存打补丁，注销注释缓存
+    patch_res = await server.call_tool(
+        "patch_memory",
+        {"session_id": sid, "address_or_offset": "0x140001000", "patch_hex": "90 90"},
+    )
+    assert _unpack(patch_res)["ok"] is True
+    assert session._annotation_cache is None
+
+    # 4. 再次反汇编，重新构建缓存
+    await server.call_tool("disassemble", {"session_id": sid, "target": "reverse_test_entry"})
+    assert session._annotation_cache is not None
+
+    # 5. 回滚补丁，再次清空缓存
+    revert_res = await server.call_tool("revert_patch", {"session_id": sid})
+    assert _unpack(revert_res)["ok"] is True
+    assert session._annotation_cache is None
+
+
+@pytest.mark.asyncio
+async def test_find_xrefs_group_by_function_and_validation(tmp_path: Path) -> None:
+    from mcp_server_reverse.server import create_mcp_server
+    from tests.fixtures.synthetic import build_synthetic_pe64
+
+    def _unpack(res: Any) -> dict[str, Any]:
+        if hasattr(res, "content") and res.content:
+            return json.loads(res.content[0].text)
+        return res
+
+    pe_file = tmp_path / "target_xrefs_grp.exe"
+    build_synthetic_pe64(pe_file)
+
+    server = create_mcp_server(ServerConfig())
+    open_res = await server.call_tool("open_binary", {"file_path": str(pe_file)})
+    sid = _unpack(open_res)["session_id"]
+
+    # 1. 非法 group_by 校验
+    bad_res = await server.call_tool(
+        "find_xrefs",
+        {"session_id": sid, "target": "0x140002250", "group_by": "unsupported_mode"},
+    )
+    bad_data = _unpack(bad_res)
+    assert bad_data["ok"] is False
+    assert bad_data["error"]["code"] == ErrorCode.INVALID_PARAMETER.value
+
+    # 2. 默认 group_by="none" 返回向后兼容扁平列表
+    flat_res = await server.call_tool(
+        "find_xrefs",
+        {"session_id": sid, "target": "0x140002250", "group_by": "none"},
+    )
+    flat_data = _unpack(flat_res)
+    assert flat_data["ok"] is True
+    assert "xrefs" in flat_data["data"]
+    assert len(flat_data["data"]["xrefs"]) >= 1
+
+    # 3. group_by="function" 按调用函数聚合折叠
+    grp_res = await server.call_tool(
+        "find_xrefs",
+        {"session_id": sid, "target": "0x140002250", "group_by": "function"},
+    )
+    grp_data = _unpack(grp_res)
+    assert grp_data["ok"] is True
+    assert grp_data["data"]["group_by"] == "function"
+    assert "functions" in grp_data["data"]
+    funcs = grp_data["data"]["functions"]
+    assert len(funcs) >= 1
+    first_func = funcs[0]
+    assert "function_name" in first_func
+    assert "function_va" in first_func
+    assert "ref_count" in first_func
+    assert "references" in first_func
+    assert first_func["ref_count"] == len(first_func["references"])
+    assert first_func["function_name"] == "reverse_test_entry"
+
+    # 4. 支持别名 group="function"
+    alias_res = await server.call_tool(
+        "find_xrefs",
+        {"session_id": sid, "target": "0x140002250", "group": "function"},
+    )
+    alias_data = _unpack(alias_res)
+    assert alias_data["ok"] is True
+    assert alias_data["data"]["group_by"] == "function"

@@ -57,9 +57,15 @@ def _create_capstone_engine(arch: str, bits: int, thumb: bool = False) -> capsto
 def _build_annotation_map(session: BinarySession) -> dict[int, str]:
     """构建虚拟地址到已知字符串、导入/导出函数及符号的快速内联注释映射表
 
+    支持会话级惰性缓存 (_annotation_cache)，后续反汇编请求直接 O(1) 命中，
+    当会话应用新补丁或回滚补丁时自动失效。
+
     @param session 当前激活的二进制分析会话
     @return dict[int, str] 虚拟地址数值到可读注释字符串的映射字典
     """
+    if isinstance(session._annotation_cache, dict):
+        return session._annotation_cache
+
     annotations: dict[int, str] = {}
 
     # 1. 静态字符串字面量
@@ -84,7 +90,7 @@ def _build_annotation_map(session: BinarySession) -> dict[int, str]:
             va_int = int(exp["address"], 16)
             annotations[va_int] = exp["name"]
 
-    # 4. 符号表与 .pdata 恢复函数
+    # 4. 符号表与 .pdata / .eh_frame / prologue 恢复函数
     symbols, _ = extract_symbols(session, limit=100000)
     for sym in symbols:
         if sym.address and sym.address != "0x0":
@@ -92,6 +98,7 @@ def _build_annotation_map(session: BinarySession) -> dict[int, str]:
             if va_int not in annotations:
                 annotations[va_int] = sym.demangled_name or sym.name
 
+    session._annotation_cache = annotations
     return annotations
 
 
@@ -438,3 +445,111 @@ def query_xrefs(
     safe_limit = max(1, min(limit, 500))
     paged = matched[safe_offset : safe_offset + safe_limit] if safe_offset < total else []
     return paged, total
+
+
+def group_xrefs_by_function(
+    session: BinarySession,
+    xrefs: list[XrefRecord],
+) -> list[dict[str, Any]]:
+    """将交叉引用记录按调用方所属函数进行折叠归集
+
+    基于会话内符号表与已恢复的函数边界列表 (.pdata, .eh_frame, prologue)
+    将所有引用点自动归集折叠到所属函数中；未定位到函数的引用统一归集至所属节区 unresolved_<sec>。
+
+    @author Ateng
+    @since 2026-10-15
+    @param session 当前激活的二进制分析会话
+    @param xrefs 待聚合的原始交叉引用记录列表
+    @return list[dict[str, Any]] 聚合折叠后的函数级分组列表
+    """
+    if not xrefs:
+        return []
+
+    symbols, _ = extract_symbols(session, limit=100000)
+    exports, _ = extract_exports(session, limit=100000)
+
+    func_map: dict[int, tuple[int, int, str, str]] = {}
+    for s in symbols:
+        if s.symbol_type not in ("function", "exception_frame", "eh_frame", "prologue"):
+            continue
+        if not s.address or s.address == "0x0":
+            continue
+        s_va = int(s.address, 16)
+        s_sz = s.size if s.size > 0 else 0
+        s_name = s.demangled_name or s.name
+        if s_va not in func_map:
+            func_map[s_va] = (s_va, s_sz, s_name, f"0x{s_va:X}")
+        else:
+            old_va, old_sz, old_name, old_va_str = func_map[s_va]
+            eff_name = (
+                s_name
+                if (old_name.startswith("sub_") and not s_name.startswith("sub_"))
+                else old_name
+            )
+            eff_sz = s_sz if s_sz > 0 else old_sz
+            func_map[s_va] = (old_va, eff_sz, eff_name, old_va_str)
+
+    for exp in exports:
+        exp_name = exp.get("name")
+        exp_addr_str = exp.get("address")
+        if not exp_name or not exp_addr_str or exp_addr_str == "0x0":
+            continue
+        e_va = int(exp_addr_str, 16)
+        if e_va not in func_map:
+            func_map[e_va] = (e_va, 0, exp_name, f"0x{e_va:X}")
+        else:
+            old_va, old_sz, old_name, old_va_str = func_map[e_va]
+            eff_name = exp_name if old_name.startswith("sub_") else old_name
+            func_map[e_va] = (old_va, old_sz, eff_name, old_va_str)
+
+    func_list = sorted(func_map.values(), key=lambda item: item[0])
+
+    groups: dict[str, dict[str, Any]] = {}
+
+    for x in xrefs:
+        from_va = int(x.from_address, 16)
+        matched_func: tuple[str, str | None] | None = None
+
+        for f_start, f_sz, f_name, f_va_str in func_list:
+            if f_sz > 0:
+                if f_start <= from_va < (f_start + f_sz):
+                    matched_func = (f_name, f_va_str)
+                    break
+            else:
+                if f_start == from_va:
+                    matched_func = (f_name, f_va_str)
+                    break
+
+        if matched_func is None and func_list:
+            import bisect
+
+            starts = [f[0] for f in func_list]
+            idx = bisect.bisect_right(starts, from_va) - 1
+            if idx >= 0:
+                cand = func_list[idx]
+                if (from_va - cand[0]) < 4096:
+                    matched_func = (cand[2], cand[3])
+
+        if matched_func:
+            f_name, f_va_str = matched_func
+            group_key = f"{f_name}_{f_va_str}"
+        else:
+            sec_suffix = x.section if x.section else "unknown"
+            f_name = f"unresolved_{sec_suffix}"
+            f_va_str = None
+            group_key = f_name
+
+        if group_key not in groups:
+            groups[group_key] = {
+                "function_name": f_name,
+                "function_va": f_va_str,
+                "ref_count": 0,
+                "references": [],
+            }
+
+        groups[group_key]["ref_count"] += 1
+        groups[group_key]["references"].append(x.to_dict())
+
+    res = list(groups.values())
+    res.sort(key=lambda g: g["ref_count"], reverse=True)
+    return res

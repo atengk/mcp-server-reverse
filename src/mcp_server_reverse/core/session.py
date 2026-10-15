@@ -79,6 +79,7 @@ class BinarySession:
     lief_binary: Any = None
     pefile_binary: Any = None
     strings_cache: Any = None
+    _annotation_cache: Any = None
     _xref_index: Any = None
     patches: list[PatchRecord] = field(default_factory=list)
     _patch_overlay: dict[int, int] = field(default_factory=dict)
@@ -125,6 +126,7 @@ class BinarySession:
             self._patch_overlay[patch.file_offset + i] = b
         self._xref_index = None
         self.strings_cache = None
+        self._annotation_cache = None
         self.touch()
 
     def revert_patch(self, patch_id: str | None = None) -> list[str]:
@@ -143,6 +145,7 @@ class BinarySession:
             self._patch_overlay.clear()
             self._xref_index = None
             self.strings_cache = None
+            self._annotation_cache = None
             self.touch()
             return reverted
 
@@ -170,6 +173,8 @@ class BinarySession:
                     self._patch_overlay[p.file_offset + i] = b
 
         self._xref_index = None
+        self.strings_cache = None
+        self._annotation_cache = None
         self.touch()
         return [patch_id]
 
