@@ -68,7 +68,7 @@ jobs:
 
     steps:
       - name: 检出源码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: 静态校验工程脚本与 Git 钩子语法与规范 (Bash Syntax & ShellCheck)
         run: |
