@@ -498,11 +498,27 @@ class BinaryParser:
         )
 
         resolved_arch = "x86_64" if is_64 else "i386"
+        bits_val = 64 if is_64 else 32
+        if lief_bin and hasattr(lief_bin, "header"):
+            mach = getattr(lief_bin.header, "machine_type", None)
+            if mach == lief.ELF.ARCH.ARM or mach == 40:
+                resolved_arch = "arm"
+                bits_val = 32
+            elif mach == lief.ELF.ARCH.AARCH64 or mach == 183:
+                resolved_arch = "arm64"
+                bits_val = 64
+            elif mach == lief.ELF.ARCH.I386 or mach == 3:
+                resolved_arch = "i386"
+                bits_val = 32
+            elif mach == lief.ELF.ARCH.X86_64 or mach == 62:
+                resolved_arch = "x86_64"
+                bits_val = 64
+
         format_info: dict[str, Any] = {
             "format": "ELF",
             "arch": resolved_arch,
             "available_architectures": [resolved_arch],
-            "bits": 64 if is_64 else 32,
+            "bits": bits_val,
             "endianness": "little",
             "entry_point": f"0x{entry_point:X}",
             "image_base": f"0x{image_base:X}",

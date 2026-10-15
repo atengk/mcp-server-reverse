@@ -248,9 +248,10 @@ def create_mcp_server(config: ServerConfig) -> MCPServer:
         name="get_symbols",
         description=(
             "检索指定二进制会话的静态与动态符号表，支持按名称正则 (name_filter) 与类型 "
-            "(symbol_type: function, object, exception_frame, all) 过滤；针对 64 位 PE 自动通过 "
-            ".pdata 异常目录恢复内部无符号函数 sub_<hex_va> "
-            "并标注精确字节长度与 exception_frame 类型"
+            "(symbol_type: function, object, exception_frame, eh_frame, prologue, all) 过滤；"
+            "针对 64 位 PE 自动通过 .pdata 异常目录恢复 exception_frame 函数，"
+            "针对 32 位 PE 通过函数序言特征扫描恢复 prologue 函数，"
+            "针对 Linux ELF 通过 .eh_frame 展开表恢复 eh_frame 函数"
         ),
     )
     def get_symbols(
@@ -419,7 +420,8 @@ def create_mcp_server(config: ServerConfig) -> MCPServer:
         name="convert_address",
         description=(
             "在虚拟地址 (va)、相对虚拟地址 (rva) 与磁盘文件物理偏移 (offset) 之间双向精确换算，"
-            "并返回所属节区名称与 R/W/X 访问权限"
+            "并返回所属节区名称与 R/W/X 访问权限；"
+            "针对 ARM 奇数地址自动按 2 字节对齐并切换至 Thumb 模式"
         ),
     )
     def convert_address(
@@ -432,18 +434,28 @@ def create_mcp_server(config: ServerConfig) -> MCPServer:
             ),
         ],
         address_type: str = "va",
+        thumb: Annotated[
+            bool | None,
+            Field(
+                default=None,
+                description="是否按 ARM Thumb 模式自适应对齐奇数地址（奇数自动对齐）",
+                validation_alias=AliasChoices("thumb", "thumb_mode", "is_thumb"),
+            ),
+        ] = None,
     ) -> dict[str, Any]:
         """在 VA、RVA 与文件物理偏移之间双向精确换算
 
         @param session_id 目标活跃分析会话标识
         @param address 待转换的地址或偏移量（如 '0x140001000'）
         @param address_type 输入地址类型 ('va', 'rva', 'offset')
+        @param thumb 可选的 ARM Thumb 模式控制开关
         @return dict[str, Any] 地址换算响应字典
         """
         return convert_address_impl(
             session_id=session_id,
             address=address,
             address_type=address_type,
+            thumb=thumb,
             session_store=session_store,
         )
 
@@ -486,7 +498,8 @@ def create_mcp_server(config: ServerConfig) -> MCPServer:
         name="disassemble",
         description=(
             "从指定十六进制虚拟地址或函数符号名 (含导出函数、符号表与 PE .pdata sub_<va>) "
-            "开始执行多架构反汇编，输出紧凑单行指令流并内联标注相对寻址注释"
+            "开始执行多架构反汇编，输出紧凑单行指令流并内联标注相对寻址注释；"
+            "支持 ARM Thumb 模式自适应切换与 thumb=True 显式控制"
         ),
     )
     def disassemble(
@@ -502,6 +515,14 @@ def create_mcp_server(config: ServerConfig) -> MCPServer:
         ],
         count: int = 32,
         stop_at_ret: bool = True,
+        thumb: Annotated[
+            bool | None,
+            Field(
+                default=None,
+                description="是否强制启用 ARM Thumb 指令模式（默认 None，奇数地址自动激活）",
+                validation_alias=AliasChoices("thumb", "thumb_mode", "is_thumb"),
+            ),
+        ] = None,
     ) -> dict[str, Any]:
         """对指定地址或符号执行静态反汇编并内联追加相对寻址注释
 
@@ -509,6 +530,7 @@ def create_mcp_server(config: ServerConfig) -> MCPServer:
         @param target 起始十六进制虚拟地址（如 '0x140001000'）或符号名称（如 'main'）
         @param count 最大反汇编指令条数（1 ~ 256，默认 32）
         @param stop_at_ret 遇到函数返回指令 (ret/retn/retf) 是否提前终止
+        @param thumb 是否开启 ARM Thumb 模式反汇编
         @return dict[str, Any] 反汇编响应字典
         """
         return disassemble_impl(
@@ -516,6 +538,7 @@ def create_mcp_server(config: ServerConfig) -> MCPServer:
             target=target,
             count=count,
             stop_at_ret=stop_at_ret,
+            thumb=thumb,
             session_store=session_store,
         )
 

@@ -518,6 +518,204 @@ def extract_exports(
     return paged, total
 
 
+def _read_uleb128(data: bytes, offset: int) -> tuple[int, int]:
+    """从二进制数据流中读取无符号 LEB128 整数"""
+    result = 0
+    shift = 0
+    while offset < len(data):
+        b = data[offset]
+        offset += 1
+        result |= (b & 0x7F) << shift
+        if (b & 0x80) == 0:
+            break
+        shift += 7
+    return result, offset
+
+
+def _read_sleb128(data: bytes, offset: int) -> tuple[int, int]:
+    """从二进制数据流中读取有符号 LEB128 整数"""
+    result = 0
+    shift = 0
+    while offset < len(data):
+        b = data[offset]
+        offset += 1
+        result |= (b & 0x7F) << shift
+        shift += 7
+        if (b & 0x80) == 0:
+            if shift < 64 and (b & 0x40):
+                result |= -(1 << shift)
+            break
+    return result, offset
+
+
+def _read_encoded_ptr(
+    data: bytes,
+    offset: int,
+    encoding: int,
+    ptr_size: int,
+    pc: int,
+) -> tuple[int | None, int]:
+    """根据 DWARF 指针编码标准解析指针值"""
+    if encoding == 0xFF:
+        return None, offset
+    fmt_code = encoding & 0x0F
+    val: int | None = None
+    if fmt_code == 0x00:
+        if ptr_size == 8:
+            if offset + 8 > len(data):
+                return None, offset
+            val = struct.unpack_from("<Q", data, offset)[0]
+            offset += 8
+        else:
+            if offset + 4 > len(data):
+                return None, offset
+            val = struct.unpack_from("<I", data, offset)[0]
+            offset += 4
+    elif fmt_code == 0x02:
+        if offset + 2 > len(data):
+            return None, offset
+        val = struct.unpack_from("<H", data, offset)[0]
+        offset += 2
+    elif fmt_code == 0x03:
+        if offset + 4 > len(data):
+            return None, offset
+        val = struct.unpack_from("<I", data, offset)[0]
+        offset += 4
+    elif fmt_code == 0x04:
+        if offset + 8 > len(data):
+            return None, offset
+        val = struct.unpack_from("<Q", data, offset)[0]
+        offset += 8
+    elif fmt_code == 0x0A:
+        if offset + 2 > len(data):
+            return None, offset
+        val = struct.unpack_from("<h", data, offset)[0]
+        offset += 2
+    elif fmt_code == 0x0B:
+        if offset + 4 > len(data):
+            return None, offset
+        val = struct.unpack_from("<i", data, offset)[0]
+        offset += 4
+    elif fmt_code == 0x0C:
+        if offset + 8 > len(data):
+            return None, offset
+        val = struct.unpack_from("<q", data, offset)[0]
+        offset += 8
+    elif fmt_code == 0x01:
+        val, offset = _read_uleb128(data, offset)
+    elif fmt_code == 0x09:
+        val, offset = _read_sleb128(data, offset)
+    else:
+        return None, offset
+
+    rel = encoding & 0x70
+    if rel == 0x10 and val is not None:
+        val = (pc + val) & (0xFFFFFFFFFFFFFFFF if ptr_size == 8 else 0xFFFFFFFF)
+    return val, offset
+
+
+def parse_eh_frame_functions(
+    data: bytes,
+    base_va: int,
+    bits: int,
+) -> list[tuple[int, int]]:
+    """解析 ELF .eh_frame 节区中的 CIE/FDE 记录，恢复所有有效内部函数的 (起始VA, 字节大小)
+
+    @param data .eh_frame 节区完整原始字节序列
+    @param base_va .eh_frame 节区在内存中的绝对基准虚拟地址
+    @param bits 目标架构指针位宽 (32 或 64)
+    @return list[tuple[int, int]] 恢复的函数列表 [(func_va, func_size)]
+    """
+    ptr_size = 8 if bits == 64 else 4
+    cies: dict[int, dict[str, Any]] = {}
+    functions: list[tuple[int, int]] = []
+    offset = 0
+    total_len = len(data)
+
+    while offset + 4 <= total_len:
+        entry_start = offset
+        length = struct.unpack_from("<I", data, offset)[0]
+        offset += 4
+        if length == 0:
+            break
+        if length == 0xFFFFFFFF:
+            if offset + 8 > total_len:
+                break
+            length = struct.unpack_from("<Q", data, offset)[0]
+            offset += 8
+
+        entry_end = offset + length
+        if entry_end > total_len:
+            break
+
+        if offset + 4 > entry_end:
+            offset = entry_end
+            continue
+
+        cie_id = struct.unpack_from("<I", data, offset)[0]
+        offset += 4
+
+        if cie_id == 0:
+            # CIE (Common Information Entry)
+            cie_info: dict[str, Any] = {"fde_encoding": 0x00, "has_z": False}
+            try:
+                if offset < entry_end:
+                    ver = data[offset]
+                    offset += 1
+                    null_idx = data.find(b"\x00", offset, entry_end)
+                    if null_idx != -1:
+                        aug_str = data[offset:null_idx].decode("ascii", errors="ignore")
+                        offset = null_idx + 1
+                        _, offset = _read_uleb128(data, offset)
+                        _, offset = _read_sleb128(data, offset)
+                        if ver == 1:
+                            offset += 1
+                        else:
+                            _, offset = _read_uleb128(data, offset)
+                        if "z" in aug_str:
+                            cie_info["has_z"] = True
+                            aug_len, offset = _read_uleb128(data, offset)
+                            aug_end = offset + aug_len
+                            for ch in aug_str:
+                                if ch == "z":
+                                    continue
+                                elif ch == "R":
+                                    if offset < aug_end:
+                                        cie_info["fde_encoding"] = data[offset]
+                                        offset += 1
+                                elif ch == "P":
+                                    if offset < aug_end:
+                                        p_enc = data[offset]
+                                        offset += 1
+                                        _, offset = _read_encoded_ptr(
+                                            data, offset, p_enc, ptr_size, base_va + offset
+                                        )
+                                elif ch == "L":
+                                    if offset < aug_end:
+                                        offset += 1
+                            offset = aug_end
+            except Exception:
+                pass
+            cies[entry_start] = cie_info
+            offset = entry_end
+        else:
+            # FDE (Frame Description Entry)
+            try:
+                cie_offset = (entry_start + 4) - cie_id
+                cie_info = cies.get(cie_offset, {"fde_encoding": 0x00, "has_z": False})
+                enc = cie_info.get("fde_encoding", 0x00)
+                pc = base_va + offset
+                func_va, offset = _read_encoded_ptr(data, offset, enc, ptr_size, pc)
+                func_size, offset = _read_encoded_ptr(data, offset, enc & 0x0F, ptr_size, 0)
+                if func_va is not None and func_size is not None and func_size > 0:
+                    functions.append((func_va, func_size))
+            except Exception:
+                pass
+            offset = entry_end
+
+    return functions
+
+
 def extract_symbols(
     session: BinarySession,
     name_filter: str | None = None,
@@ -525,11 +723,13 @@ def extract_symbols(
     offset: int = 0,
     limit: int = 50,
 ) -> tuple[list[SymbolEntry], int]:
-    """提取静态/动态符号，并针对 64 位 PE 自动通过 .pdata 异常目录恢复内部无符号函数
+    """提取静态/动态符号，并针对 64 位 PE 自动通过 .pdata 异常目录恢复内部无符号函数，
+    针对 32 位 PE 扫描经典序言恢复内部函数，针对 ELF 解析 .eh_frame 恢复内部函数
 
     @param session 当前激活的分析会话
     @param name_filter 符号名称正则过滤表达式
-    @param symbol_type 符号类型过滤 ("function", "object", "exception_frame", "all")
+    @param symbol_type 符号类型过滤 ("function", "object", "exception_frame",
+        "eh_frame", "prologue", "all")
     @param offset 分页偏移量
     @param limit 单页最大数量
     @return tuple[list[SymbolEntry], int] 符号条目列表与匹配总数
@@ -581,6 +781,73 @@ def extract_symbols(
                         )
         except Exception as exc:
             logger.debug("从 .pdata 恢复无符号函数失败: %s", exc)
+
+    # 2. 针对 32 位 PE 缺乏 .pdata 时执行函数序言特征扫描 (Prologue Scanning)
+    if session.format == "PE" and session.bits == 32 and symbol_type in ("all", "prologue"):
+        try:
+            sections = extract_sections(session)
+            for sec in sections:
+                if "x" in sec.permissions or sec.name in (".text", "CODE"):
+                    if sec.raw_size <= 0:
+                        continue
+                    sec_data = session.read_effective_bytes(sec.raw_offset, sec.raw_size)
+                    sec_va = int(sec.virtual_address, 16)
+                    found_offsets: set[int] = set()
+                    for pat in (b"\x55\x8b\xec", b"\x55\x89\xe5"):
+                        start = 0
+                        while True:
+                            idx = sec_data.find(pat, start)
+                            if idx == -1:
+                                break
+                            found_offsets.add(idx)
+                            start = idx + 1
+                    for off in sorted(found_offsets):
+                        va = sec_va + off
+                        func_name = f"sub_{va:X}"
+                        if name_regex and not name_regex.search(func_name):
+                            continue
+                        ret_idx = sec_data.find(b"\xc3", off)
+                        func_len = (ret_idx + 1) - off if ret_idx != -1 else 0
+                        all_symbols.append(
+                            SymbolEntry(
+                                name=func_name,
+                                demangled_name=None,
+                                library=None,
+                                address=f"0x{va:X}",
+                                size=func_len,
+                                symbol_type="prologue",
+                                category=None,
+                            )
+                        )
+        except Exception as exc:
+            logger.debug("PE32 序言特征扫描恢复函数失败: %s", exc)
+
+    # 3. 针对 Linux ELF 通过 .eh_frame DWARF 展开表恢复无符号内部函数
+    if session.format == "ELF" and symbol_type in ("all", "eh_frame"):
+        try:
+            sections = extract_sections(session)
+            eh_sec = next((s for s in sections if s.name == ".eh_frame"), None)
+            if eh_sec and eh_sec.raw_size > 0:
+                eh_bytes = session.read_effective_bytes(eh_sec.raw_offset, eh_sec.raw_size)
+                eh_va = int(eh_sec.virtual_address, 16)
+                recovered_funcs = parse_eh_frame_functions(eh_bytes, eh_va, session.bits)
+                for f_va, f_sz in recovered_funcs:
+                    func_name = f"sub_{f_va:X}"
+                    if name_regex and not name_regex.search(func_name):
+                        continue
+                    all_symbols.append(
+                        SymbolEntry(
+                            name=func_name,
+                            demangled_name=None,
+                            library=None,
+                            address=f"0x{f_va:X}",
+                            size=f_sz,
+                            symbol_type="eh_frame",
+                            category=None,
+                        )
+                    )
+        except Exception as exc:
+            logger.debug("ELF .eh_frame 展开表恢复函数失败: %s", exc)
 
     # 2. 提取 LIEF 中的符号表 (静态与动态符号)
     if session.lief_binary and hasattr(session.lief_binary, "symbols"):

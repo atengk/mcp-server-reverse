@@ -53,12 +53,14 @@ def convert_address_core(
     session: BinarySession,
     address: str | int,
     address_type: str = "va",
+    thumb: bool | None = None,
 ) -> dict[str, Any]:
     """在虚拟地址 (va)、相对虚拟地址 (rva) 与文件物理偏移 (offset) 之间双向精确换算
 
     @param session 当前激活的二进制分析会话
     @param address 待换算的地址或偏移量
     @param address_type 输入地址类型 ("va", "rva", "offset")
+    @param thumb 可选的 ARM Thumb 模式控制开关 (None 时偶数保持 ARM、奇数自动校准为 Thumb)
     @return dict[str, Any] 包含 va, rva, offset, section, permissions 的换算结果字典
     @throws ValueError 当入参类型或格式非法时抛出
     @throws LookupError 当地址越界未落在任何节区时抛出
@@ -71,9 +73,21 @@ def convert_address_core(
     sections = extract_sections(session)
     image_base = session.image_base
 
+    arch_lower = session.arch.lower()
+    is_arm32 = "arm" in arch_lower and "arm64" not in arch_lower and "aarch64" not in arch_lower
+
+    if thumb is not None:
+        is_thumb = thumb
+    elif is_arm32:
+        is_thumb = val % 2 == 1
+    else:
+        is_thumb = False
+
+    effective_val = (val & ~1) if (is_thumb and (val % 2 == 1)) else val
+
     # 1. 按 VA 或 RVA 换算
     if addr_type in ("va", "rva"):
-        target_va = val if addr_type == "va" else (image_base + val)
+        target_va = effective_val if addr_type == "va" else (image_base + effective_val)
         for sec in sections:
             sec_va = int(sec.virtual_address, 16)
             sec_span = max(sec.virtual_size, sec.raw_size)
@@ -81,31 +95,37 @@ def convert_address_core(
                 delta = target_va - sec_va
                 rva_val = (target_va - image_base) if target_va >= image_base else target_va
                 file_off = (sec.raw_offset + delta) if delta < sec.raw_size else None
-                return {
+                res: dict[str, Any] = {
                     "va": f"0x{target_va:X}",
                     "rva": f"0x{rva_val:X}",
                     "offset": file_off,
                     "section": sec.name,
                     "permissions": sec.permissions,
                 }
+                if is_arm32 or thumb is not None:
+                    res["thumb_mode"] = is_thumb
+                return res
         raise LookupError(f"虚拟地址 0x{target_va:X} 超出二进制已知节区映射范围")
 
     # 2. 按物理文件偏移 Offset 换算
     for sec in sections:
-        if sec.raw_offset <= val < (sec.raw_offset + sec.raw_size):
-            delta = val - sec.raw_offset
+        if sec.raw_offset <= effective_val < (sec.raw_offset + sec.raw_size):
+            delta = effective_val - sec.raw_offset
             sec_va = int(sec.virtual_address, 16)
             target_va = sec_va + delta
             rva_val = (target_va - image_base) if target_va >= image_base else target_va
-            return {
+            res = {
                 "va": f"0x{target_va:X}",
                 "rva": f"0x{rva_val:X}",
-                "offset": val,
+                "offset": effective_val,
                 "section": sec.name,
                 "permissions": sec.permissions,
             }
+            if is_arm32 or thumb is not None:
+                res["thumb_mode"] = is_thumb
+            return res
 
-    raise LookupError(f"文件物理偏移 0x{val:X} 未落在任何已知映射节区内")
+    raise LookupError(f"文件物理偏移 0x{effective_val:X} 未落在任何已知映射节区内")
 
 
 def format_hexdump_lines(data: bytes, base_address: int) -> list[str]:

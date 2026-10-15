@@ -30,11 +30,12 @@ ARM64_ADRP_WINDOW_SIZE: int = 4
 RET_MNEMONICS: tuple[str, ...] = ("ret", "retn", "retf", "retq")
 
 
-def _create_capstone_engine(arch: str, bits: int) -> capstone.Cs:
+def _create_capstone_engine(arch: str, bits: int, thumb: bool = False) -> capstone.Cs:
     """根据架构与位宽创建开启 detail 模式的 Capstone 反汇编引擎实例
 
-    @param arch 架构名称 (x86_64, i386, arm64 等)
+    @param arch 架构名称 (x86_64, i386, arm, arm64 等)
     @param bits 指针位宽 (32 或 64)
+    @param thumb 是否开启 ARM Thumb 指令模式 (仅当 arch 为 ARM 时有效)
     @return capstone.Cs 初始化完毕的 Capstone 实例
     """
     arch_lower = arch.lower()
@@ -43,7 +44,7 @@ def _create_capstone_engine(arch: str, bits: int) -> capstone.Cs:
         cs_mode = capstone.CS_MODE_ARM
     elif "arm" in arch_lower:
         cs_arch = capstone.CS_ARCH_ARM
-        cs_mode = capstone.CS_MODE_ARM
+        cs_mode = capstone.CS_MODE_THUMB if thumb else capstone.CS_MODE_ARM
     else:
         cs_arch = capstone.CS_ARCH_X86
         cs_mode = capstone.CS_MODE_64 if bits == 64 else capstone.CS_MODE_32
@@ -164,6 +165,7 @@ def disassemble_at(
     target_va: int,
     count: int = 32,
     stop_at_ret: bool = True,
+    thumb: bool | None = None,
 ) -> dict[str, Any]:
     """从指定虚拟地址开始执行反汇编，输出紧凑单行指令流并自动追加相对寻址注释
 
@@ -171,29 +173,41 @@ def disassemble_at(
     @param target_va 起始绝对虚拟地址整数
     @param count 最大反汇编指令条数 (上限 256)
     @param stop_at_ret 遇到 ret 系列指令时是否自动停止
+    @param thumb 可选的 ARM Thumb 模式控制开关 (None 时偶数保持 ARM、奇数自动校准并开启 Thumb)
     @return dict[str, Any] 反汇编结果载荷字典
     @throws LookupError 当目标地址越界或无对应物理字节时抛出
     """
+    arch_lower = session.arch.lower()
+    is_arm32 = "arm" in arch_lower and "arm64" not in arch_lower and "aarch64" not in arch_lower
+
+    if thumb is not None:
+        is_thumb = thumb
+    elif is_arm32:
+        is_thumb = target_va % 2 == 1
+    else:
+        is_thumb = False
+
+    effective_va = (target_va & ~1) if (is_thumb and (target_va % 2 == 1)) else target_va
+
     safe_count = max(1, min(count, MAX_DISASM_COUNT))
-    conv = convert_address_core(session, target_va, "va")
+    conv = convert_address_core(session, effective_va, "va", thumb=is_thumb)
     file_off = conv["offset"]
     if file_off is None:
-        raise LookupError(f"虚拟地址 0x{target_va:X} 无对应物理文件字节")
+        raise LookupError(f"虚拟地址 0x{effective_va:X} 无对应物理文件字节")
 
     code_slice = session.read_effective_bytes(file_off, safe_count * 16)
     if not code_slice:
-        raise LookupError(f"虚拟地址 0x{target_va:X} 处无法读取有效指令字节")
+        raise LookupError(f"虚拟地址 0x{effective_va:X} 处无法读取有效指令字节")
 
-    md = _create_capstone_engine(session.arch, session.bits)
+    md = _create_capstone_engine(session.arch, session.bits, thumb=is_thumb)
     annotations = _build_annotation_map(session)
-    arch_lower = session.arch.lower()
     is_arm64 = "arm64" in arch_lower or "aarch64" in arch_lower
     adrp_window: dict[int, tuple[int, int]] = {}
 
     instructions: list[DisasmInstruction] = []
     stopped_at_ret = False
 
-    for seq_idx, insn in enumerate(md.disasm(code_slice, target_va)):
+    for seq_idx, insn in enumerate(md.disasm(code_slice, effective_va)):
         if is_arm64:
             ref_va, _ = _extract_arm64_insn_target(insn, seq_idx, adrp_window)
         else:
@@ -223,20 +237,29 @@ def disassemble_at(
             )
         )
 
-        if stop_at_ret and insn.mnemonic.lower() in RET_MNEMONICS:
-            stopped_at_ret = True
-            break
+        if stop_at_ret:
+            mnem = insn.mnemonic.lower()
+            if mnem in RET_MNEMONICS:
+                stopped_at_ret = True
+                break
+            if is_arm32 and mnem == "bx" and insn.op_str.lower() == "lr":
+                stopped_at_ret = True
+                break
+            if is_arm32 and mnem == "pop" and "pc" in insn.op_str.lower():
+                stopped_at_ret = True
+                break
 
         if len(instructions) >= safe_count:
             break
 
     return {
-        "start_address": f"0x{target_va:X}",
+        "start_address": f"0x{effective_va:X}",
         "section": conv["section"],
         "instruction_count": len(instructions),
         "stopped_at_ret": stopped_at_ret,
         "instructions": instructions,
         "compact_lines": [i.formatted for i in instructions],
+        "thumb_mode": is_thumb,
     }
 
 

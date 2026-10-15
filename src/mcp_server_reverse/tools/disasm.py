@@ -48,6 +48,7 @@ def convert_address_impl(
     address: str | int,
     address_type: str,
     session_store: SessionStore,
+    thumb: bool | None = None,
 ) -> dict[str, Any]:
     """convert_address 核心业务实现
 
@@ -55,6 +56,7 @@ def convert_address_impl(
     @param address 待转换的地址或偏移量
     @param address_type 输入地址类型 ("va", "rva", "offset")
     @param session_store 会话池实例
+    @param thumb 可选的 ARM Thumb 模式控制开关 (None 时偶数保持 ARM、奇数自动校准为 Thumb)
     @return dict[str, Any] 统一响应信封字典
     """
     session, err_resp = get_session_or_error(session_id, session_store)
@@ -66,6 +68,7 @@ def convert_address_impl(
             session=session,
             address=address,
             address_type=address_type,
+            thumb=thumb,
         )
     except ValueError as exc:
         return create_error_response(
@@ -160,6 +163,7 @@ def disassemble_impl(
     count: int,
     stop_at_ret: bool,
     session_store: SessionStore,
+    thumb: bool | None = None,
 ) -> dict[str, Any]:
     """disassemble 核心业务实现
 
@@ -168,6 +172,7 @@ def disassemble_impl(
     @param count 最大反汇编指令条数 (上限 256)
     @param stop_at_ret 遇到函数返回指令 (ret/retn/retf) 是否提前终止
     @param session_store 会话池实例
+    @param thumb 可选的 ARM Thumb 模式控制开关 (None 时偶数保持 ARM、奇数自动校准为 Thumb)
     @return dict[str, Any] 统一响应信封字典
     """
     session, err_resp = get_session_or_error(session_id, session_store)
@@ -181,6 +186,7 @@ def disassemble_impl(
             target_va=target_va,
             count=count,
             stop_at_ret=stop_at_ret,
+            thumb=thumb,
         )
     except ValueError as exc:
         return create_error_response(

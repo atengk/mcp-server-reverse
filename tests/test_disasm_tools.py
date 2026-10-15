@@ -5,7 +5,9 @@
 """
 
 import asyncio
+import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -221,3 +223,67 @@ async def test_mcp_server_registers_all_tools() -> None:
     }
     assert tool_names == expected_tools
     assert len(tool_names) == 22
+
+
+@pytest.mark.asyncio
+async def test_arm32_thumb_mode_auto_and_explicit(tmp_path: Path) -> None:
+    from mcp_server_reverse.server import create_mcp_server
+    from tests.fixtures.synthetic import build_synthetic_arm32_elf
+
+    def _unpack(res: Any) -> dict[str, Any]:
+        if hasattr(res, "content") and res.content:
+            return json.loads(res.content[0].text)
+        return res
+
+    arm_elf = tmp_path / "target_arm32.elf"
+    build_synthetic_arm32_elf(arm_elf)
+
+    server = create_mcp_server(ServerConfig())
+    open_res = await server.call_tool("open_binary", {"file_path": str(arm_elf)})
+    open_dict = _unpack(open_res)
+    sid = open_dict["session_id"]
+    assert sid is not None
+
+    # 1. disassemble 奇数地址 (0x10001) 自动对齐至 0x10000 并切换 Thumb 模式反汇编
+    dis_odd = await server.call_tool(
+        "disassemble", {"session_id": sid, "target": "0x10001", "count": 2}
+    )
+    data_odd = _unpack(dis_odd)
+    assert data_odd["ok"] is True
+    assert data_odd["data"]["start_address"] == "0x10000"
+    assert data_odd["data"]["thumb_mode"] is True
+    insns_odd = data_odd["data"]["instructions"]
+    assert len(insns_odd) >= 2
+    assert insns_odd[0]["mnemonic"] == "nop"
+    assert insns_odd[1]["mnemonic"] == "bx"
+
+    # 2. disassemble 偶数地址 (0x10000) 显式传入 thumb=True 强制按 Thumb 模式反汇编
+    dis_even_thumb = await server.call_tool(
+        "disassemble", {"session_id": sid, "target": "0x10000", "count": 2, "thumb": True}
+    )
+    data_even = _unpack(dis_even_thumb)
+    assert data_even["ok"] is True
+    assert data_even["data"]["start_address"] == "0x10000"
+    assert data_even["data"]["thumb_mode"] is True
+    insns_even = data_even["data"]["instructions"]
+    assert insns_even[0]["mnemonic"] == "nop"
+    assert insns_even[1]["mnemonic"] == "bx"
+
+    # 3. convert_address 奇数地址自动对齐并标记 thumb_mode
+    conv_odd = await server.call_tool(
+        "convert_address", {"session_id": sid, "address": "0x10001", "address_type": "va"}
+    )
+    conv_data_odd = _unpack(conv_odd)
+    assert conv_data_odd["ok"] is True
+    assert conv_data_odd["data"]["va"] == "0x10000"
+    assert conv_data_odd["data"]["thumb_mode"] is True
+
+    # 4. convert_address 偶数地址显式指定 thumb=True
+    conv_even = await server.call_tool(
+        "convert_address",
+        {"session_id": sid, "address": "0x10000", "address_type": "va", "thumb": True},
+    )
+    conv_data_even = _unpack(conv_even)
+    assert conv_data_even["ok"] is True
+    assert conv_data_even["data"]["va"] == "0x10000"
+    assert conv_data_even["data"]["thumb_mode"] is True

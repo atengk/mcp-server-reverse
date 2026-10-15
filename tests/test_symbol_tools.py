@@ -4,11 +4,16 @@
 @since 2026-10-13
 """
 
+import json
 from pathlib import Path
+from typing import Any
+
+import pytest
 
 from mcp_server_reverse.core.config import ServerConfig
 from mcp_server_reverse.core.models import ErrorCode
 from mcp_server_reverse.core.session import SessionStore
+from mcp_server_reverse.server import create_mcp_server
 from mcp_server_reverse.tools.session import open_binary_impl
 from mcp_server_reverse.tools.symbols import (
     get_exports_impl,
@@ -16,7 +21,12 @@ from mcp_server_reverse.tools.symbols import (
     get_sections_impl,
     get_symbols_impl,
 )
-from tests.fixtures.synthetic import build_synthetic_elf64, build_synthetic_pe64
+from tests.fixtures.synthetic import (
+    build_synthetic_elf64,
+    build_synthetic_elf_with_eh_frame,
+    build_synthetic_pe32,
+    build_synthetic_pe64,
+)
 
 
 def test_symbol_tools_pe64_end_to_end(tmp_path: Path) -> None:
@@ -292,3 +302,75 @@ def test_symbol_tools_elf64(tmp_path: Path) -> None:
     )
     assert exp_resp["ok"] is True
     assert isinstance(exp_resp["data"]["exports"], list)
+
+
+@pytest.mark.asyncio
+async def test_symbol_recovery_elf_eh_frame(tmp_path: Path) -> None:
+    def _unpack(res: Any) -> dict[str, Any]:
+        if hasattr(res, "content") and res.content:
+            return json.loads(res.content[0].text)
+        return res
+
+    elf_file = tmp_path / "stripped_eh.elf"
+    build_synthetic_elf_with_eh_frame(elf_file)
+
+    server = create_mcp_server(ServerConfig())
+    open_res = await server.call_tool("open_binary", {"file_path": str(elf_file)})
+    open_dict = _unpack(open_res)
+    sid = open_dict["session_id"]
+    assert sid is not None
+
+    # 1. 查询 symbol_type="eh_frame"
+    sym_res = await server.call_tool("get_symbols", {"session_id": sid, "symbol_type": "eh_frame"})
+    sym_data = _unpack(sym_res)
+    assert sym_data["ok"] is True
+    symbols = sym_data["data"]["symbols"]
+    assert len(symbols) >= 1
+    target = next((s for s in symbols if s["address"] == "0x401000"), None)
+    assert target is not None
+    assert target["name"] == "sub_401000"
+    assert target["type"] == "eh_frame"
+    assert target["size"] == 32
+
+    # 2. 查询 symbol_type="all"，确保包含 eh_frame 恢复符号
+    sym_all = await server.call_tool("get_symbols", {"session_id": sid, "symbol_type": "all"})
+    all_data = _unpack(sym_all)
+    assert any(
+        s["name"] == "sub_401000" and s["type"] == "eh_frame" for s in all_data["data"]["symbols"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_symbol_recovery_pe32_prologue(tmp_path: Path) -> None:
+    def _unpack(res: Any) -> dict[str, Any]:
+        if hasattr(res, "content") and res.content:
+            return json.loads(res.content[0].text)
+        return res
+
+    pe32_file = tmp_path / "target_pe32.exe"
+    build_synthetic_pe32(pe32_file)
+
+    server = create_mcp_server(ServerConfig())
+    open_res = await server.call_tool("open_binary", {"file_path": str(pe32_file)})
+    open_dict = _unpack(open_res)
+    sid = open_dict["session_id"]
+    assert sid is not None
+
+    # 1. 查询 symbol_type="prologue"
+    sym_res = await server.call_tool("get_symbols", {"session_id": sid, "symbol_type": "prologue"})
+    sym_data = _unpack(sym_res)
+    assert sym_data["ok"] is True
+    symbols = sym_data["data"]["symbols"]
+    assert len(symbols) >= 1
+    target = next((s for s in symbols if s["address"] == "0x401000"), None)
+    assert target is not None
+    assert target["name"] == "sub_401000"
+    assert target["type"] == "prologue"
+    assert target["size"] == 5
+
+    # 2. 查询 symbol_type="all"，确保包含 prologue 恢复符号
+    sym_all = await server.call_tool("get_symbols", {"session_id": sid, "symbol_type": "all"})
+    all_data = _unpack(sym_all)
+    assert any(
+        s["name"] == "sub_401000" and s["type"] == "prologue" for s in all_data["data"]["symbols"]
+    )

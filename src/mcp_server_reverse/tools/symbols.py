@@ -202,7 +202,7 @@ def get_symbols_impl(
         return err_resp or {}
 
     effective_type = symbol_type if symbol_type is not None else "all"
-    valid_types = ("function", "object", "exception_frame", "all")
+    valid_types = ("function", "object", "exception_frame", "eh_frame", "prologue", "all")
     if effective_type not in valid_types:
         return create_error_response(
             code=ErrorCode.INVALID_PARAMETER,

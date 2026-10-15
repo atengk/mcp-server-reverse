@@ -758,3 +758,113 @@ def build_synthetic_dotnet_pe(output_path: Path) -> Path:
     data += bsjb
     output_path.write_bytes(bytes(data))
     return output_path
+
+
+def build_synthetic_arm32_elf(output_path: Path) -> Path:
+    """动态合成最小合法的 32 位 ARM32 ELF 文件并落盘
+
+    包含 .text 代码节区（VA 0x10000），内嵌 Thumb 指令 nop (0x00 0xbf) 与 bx lr (0x70 0x47)。
+
+    @author Ateng
+    @since 2026-10-15
+    @param output_path 目标输出物理文件路径
+    @return Path 成功落盘的文件路径
+    """
+    shstrtab = b"\x00.text\x00.shstrtab\x00"
+    shstr_text_off = 1
+    shstr_shstrtab_off = 7
+
+    shdr0 = b"\x00" * 40
+    shdr_text = struct.pack("<IIIIIIIIII", shstr_text_off, 1, 6, 0x10000, 0x100, 0x100, 0, 0, 4, 0)
+    shdr_shstr = struct.pack(
+        "<IIIIIIIIII", shstr_shstrtab_off, 3, 0, 0, 0x200, len(shstrtab), 0, 0, 1, 0
+    )
+    shdrs = shdr0 + shdr_text + shdr_shstr
+    shoff = 0x240
+
+    e_ident = b"\x7fELF\x01\x01\x01\x00" + b"\x00" * 8
+    ehdr = struct.pack(
+        "<16sHHIIIIIHHHHHH",
+        e_ident,
+        2,
+        40,
+        1,
+        0x10000,
+        52,
+        shoff,
+        0x05000000,
+        52,
+        32,
+        1,
+        40,
+        3,
+        2,
+    )
+    phdr = struct.pack("<IIIIIIII", 1, 0x100, 0x10000, 0x10000, 0x100, 0x100, 5, 0x1000)
+
+    padding1 = b"\x00" * (0x100 - len(ehdr) - len(phdr))
+    code = b"\x00\xbf\x70\x47" + b"\x00" * (0x100 - 4)
+    padding2 = b"\x00" * (0x200 - (0x100 + len(code)))
+    shstr_data = shstrtab + b"\x00" * (0x40 - len(shstrtab))
+
+    raw = ehdr + phdr + padding1 + code + padding2 + shstr_data + shdrs
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_bytes(raw)
+    return output_path
+
+
+def build_synthetic_elf_with_eh_frame(output_path: Path) -> Path:
+    """动态合成带有标准 .eh_frame DWARF 展开表的 64 位 ELF 剥离文件并落盘
+
+    包含：
+    - .text 代码节区（VA 0x401000，尺寸 0x100）
+    - .eh_frame 展开表节区（VA 0x402000），内含一条指向 0x401000、长度 0x20 的 FDE 记录
+
+    @author Ateng
+    @since 2026-10-15
+    @param output_path 目标输出物理文件路径
+    @return Path 成功落盘的文件路径
+    """
+    shstrtab = b"\x00.text\x00.eh_frame\x00.shstrtab\x00"
+    shstr_text_off = 1
+    shstr_eh_off = 7
+    shstr_shstrtab_off = 17
+
+    cie_body = struct.pack("<IB", 0, 1) + b"zR\x00\x01\x78\x10\x01\x1b\x00\x00"
+    cie = struct.pack("<I", len(cie_body)) + cie_body
+    fde_start = len(cie)
+    fde_pc = 0x402000 + fde_start + 8
+    disp = 0x401000 - fde_pc
+    fde_body = struct.pack("<I", fde_start + 4) + struct.pack("<iI", disp, 0x20) + b"\x00"
+    fde = struct.pack("<I", len(fde_body)) + fde_body
+    eh_data = cie + fde + b"\x00\x00\x00\x00"
+    eh_data += b"\x00" * (0x100 - len(eh_data))
+
+    shdr0 = b"\x00" * 64
+    shdr_text = struct.pack(
+        "<IIQQQQIIQQ", shstr_text_off, 1, 6, 0x401000, 0x100, 0x100, 0, 0, 16, 0
+    )
+    shdr_eh = struct.pack(
+        "<IIQQQQIIQQ", shstr_eh_off, 1, 2, 0x402000, 0x200, len(eh_data), 0, 0, 8, 0
+    )
+    shdr_shstr = struct.pack(
+        "<IIQQQQIIQQ", shstr_shstrtab_off, 3, 0, 0, 0x300, len(shstrtab), 0, 0, 1, 0
+    )
+
+    shdrs = shdr0 + shdr_text + shdr_eh + shdr_shstr
+    shoff = 0x380
+
+    e_ident = b"\x7fELF\x02\x01\x01\x00" + b"\x00" * 8
+    ehdr = struct.pack(
+        "<16sHHIQQQIHHHHHH", e_ident, 2, 62, 1, 0x401000, 64, shoff, 0, 64, 56, 1, 64, 4, 3
+    )
+    phdr = struct.pack("<IIQQQQQQ", 1, 5, 0, 0x400000, 0x400000, 0x480, 0x480, 0x1000)
+
+    padding1 = b"\x00" * (0x100 - len(ehdr) - len(phdr))
+    code = b"\x90" * 0x100
+    shstr_padded = shstrtab + b"\x00" * (0x80 - len(shstrtab))
+
+    raw = ehdr + phdr + padding1 + code + eh_data + shstr_padded + shdrs
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_bytes(raw)
+    return output_path
