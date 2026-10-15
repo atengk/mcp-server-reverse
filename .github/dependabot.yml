@@ -3,12 +3,12 @@
 #
 # 机制说明：
 # 1. 本配置负责常规月度依赖升级（Version Updates），采用语义化双轨模型聚合 PR；
-# 2. 涵盖 GitHub Actions、Python (pip/uv) 与 Docker 基础镜像三大生态。
+# 2. 针对高危 CVE 漏洞的即时修复（Dependabot Security Updates）由 GitHub 平台原生实时安抚，两者互补。
 # ==============================================================================
 
 version: 2
 updates:
-  # 1. 持续监控 GitHub Actions 工作流版本更新
+  # 持续监控 GitHub Actions 工作流版本更新
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
@@ -27,7 +27,7 @@ updates:
           - "minor"
           - "patch"
 
-  # 2. 持续监控 Python 依赖更新 (pyproject.toml / uv.lock)
+  # 监控 Python 依赖生态
   - package-ecosystem: "pip"
     directory: "/"
     schedule:
@@ -46,7 +46,7 @@ updates:
           - "minor"
           - "patch"
 
-  # 3. 持续监控 Dockerfile 容器基础镜像更新
+  # 监控 Dockerfile 基础镜像更新
   - package-ecosystem: "docker"
     directory: "/"
     schedule:
@@ -61,3 +61,6 @@ updates:
       docker-images:
         patterns:
           - "*"
+        update-types:
+          - "minor"
+          - "patch"

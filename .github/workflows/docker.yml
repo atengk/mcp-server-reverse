@@ -1,22 +1,20 @@
 # ==============================================================================
-# 工作流：Python 多架构容器镜像构建与发布 (Python Docker - GHCR)
-# 适用场景：mcp-server-reverse 在隔离容器/远程环境中以 SSE / Streamable-HTTP 模式部署 (linux/amd64, linux/arm64)
+# 工作流：Python 主干测试容器镜像构建与发布 (Python Docker - GHCR Edge/Nightly)
+# 适用场景：主干分支推送自动构建测试镜像并推送至 GHCR (linux/amd64, linux/arm64)
 # 触发通道：
-#   - 主干分支推送 (push branches: main, master)：自动构建并推送带有 latest 与 short-sha 标签的镜像
-#   - 语义化标签推送 (push tags: v*)：自动解析并生成 SemVer 镜像标签 (如 v1.0.0, 1.0)
+#   - 主干分支推送 (push branches: main, master)：自动构建并推送带有 latest 与 short-sha 标签的开发版镜像
 #   - 网页手动触发 (workflow_dispatch)
+# 注：语义化发版镜像由统一发版流水线 (release.yml) 负责，避免双跑冲突
 # ==============================================================================
 
-name: Docker (GHCR)
+name: Docker (GHCR Edge)
 
 on:
   push:
     branches: [main, master]
-    tags:
-      - 'v*'
   workflow_dispatch:
 
-# 并发控制：同一分支有新构建时自动取消旧任务；标签构建独立执行
+# 并发控制：同一分支有新构建时自动取消旧任务
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -26,7 +24,7 @@ permissions:
 
 jobs:
   build-and-push:
-    name: 构建并推送多架构容器镜像
+    name: 构建并推送开发版容器镜像
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -72,7 +70,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: 提取 Docker 镜像元数据 (自动计算 SemVer 标签)
+      - name: 提取 Docker 镜像元数据
         id: meta
         if: steps.check-tag.outputs.skip != 'true'
         uses: docker/metadata-action@v6
@@ -80,11 +78,10 @@ jobs:
           images: |
             ghcr.io/${{ env.REPO_LC }}
           flavor: |
-            latest=${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || (startsWith(github.ref, 'refs/tags/v') && !contains(github.ref, '-')) }}
+            latest=true
           tags: |
             type=sha,format=short
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+            type=edge,branch=main
 
       - name: 构建并推送多架构镜像 (amd64 / arm64)
         if: steps.check-tag.outputs.skip != 'true'

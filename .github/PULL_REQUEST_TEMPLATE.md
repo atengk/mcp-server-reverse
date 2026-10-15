@@ -20,6 +20,6 @@
 
 ## 自检清单
 - [ ] 提交信息符合 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/) 规范
-- [ ] 本地已通过全部已有测试及代码检查 (`uv run ruff check .` & `uv run pytest`)
+- [ ] 本地已通过全部已有测试及代码检查
 - [ ] 如有新增/修改功能，已补充对应测试用例
 - [ ] 如涉及 API 或配置变更，已同步更新相关文档

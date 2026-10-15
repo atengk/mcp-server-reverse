@@ -5,11 +5,11 @@
 #   - push: 主干分支 (main, master) 代码推送
 #   - pull_request: 针对主干分支的 PR 创建、编辑、代码同步
 # 核心特性：
-#   - Conventional Commits PR 标题规范静态校验
-#   - 工程内置自动化脚本 (scripts/*.sh) 与 Git 钩子 (.githooks/*) ShellCheck 静态分析
-#   - 基于 astral-sh/setup-uv 的极速 Python 3.12 环境与依赖缓存
-#   - Ruff 代码风格校验 (check) 与格式化校验 (format --check)
-#   - pytest 自动化单元测试与覆盖率统计
+#   - 动态并发控制 (Dynamic Concurrency)：PR 提交自动中断陈旧运行，主干提交按序排队
+#   - 内部路径短路直通 (Path Fast-Pass)：纯文档与非代码改动秒级放行，彻底消除分支保护规则死锁
+#   - 分层兼容性矩阵 (Matrix Strategy)：PR 快速单版本验证，主干推送全量覆盖 Python 3.11/3.12
+#   - 深度集成现代化 astral-sh/setup-uv 与 Ruff 高速工具链
+#   - 终审门禁看板 (All Checks Passed)：统一盖戳并直出 GitHub Step Summary 结构化报表
 # ==============================================================================
 
 name: CI
@@ -21,12 +21,11 @@ on:
     branches: [main, master]
     types: [opened, edited, synchronize, reopened]
 
-# 并发控制：同一分支/PR 有新提交时自动取消正在执行的陈旧构建，防止竞态并节省 Runner 资源
+# 动态并发控制：PR 提交自动取消陈旧构建以节约算力；主干提交排队顺序执行保历史完整
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-# 最小权限原则：仅授予代码仓库读取权限
 permissions:
   contents: read
 
@@ -38,6 +37,7 @@ jobs:
     name: 校验 PR 标题规范
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
+    timeout-minutes: 5
     permissions:
       pull-requests: read
     steps:
@@ -60,12 +60,35 @@ jobs:
             revert
 
   # ----------------------------------------------------------------------------
-  # Job 2: 脚本语法校验、Python 静态检查与单元测试
+  # Job 2: 动态探测变更路径 (实现内部短路直通网关)
   # ----------------------------------------------------------------------------
-  test:
-    name: 静态检查、格式化与测试 (Python + uv)
+  detect-changes:
+    name: 探测变更路径
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      code_changed: ${{ steps.filter.outputs.code }}
+    steps:
+      - name: 检出源码
+        uses: actions/checkout@v7
 
+      - name: 分析改动文件类型
+        uses: dorny/paths-filter@v4
+        id: filter
+        with:
+          filters: |
+            code:
+              - '!(*.md|docs/**|.gitignore|.editorconfig|LICENSE)'
+
+  # ----------------------------------------------------------------------------
+  # Job 3: 代码风格与规范静态分析 (Ruff & ShellCheck)
+  # ----------------------------------------------------------------------------
+  lint:
+    name: 代码规范与格式化 (Ruff + uv)
+    runs-on: ubuntu-latest
+    needs: [detect-changes]
+    if: needs.detect-changes.outputs.code_changed != 'false'
+    timeout-minutes: 10
     steps:
       - name: 检出源码
         uses: actions/checkout@v7
@@ -95,17 +118,99 @@ jobs:
 
       - name: 代码风格与语法检查 (Ruff Linter & Formatter)
         run: |
-          if [ -d src ] || [ -d tests ]; then
-            uv run ruff check .
-            uv run ruff format --check .
-          else
-            echo "暂未发现 Python 源码目录，跳过 Ruff 检查。"
+          uv run ruff check .
+          uv run ruff format --check .
+
+  # ----------------------------------------------------------------------------
+  # Job 4: 跨版本兼容性单元测试矩阵 (pytest + uv)
+  # ----------------------------------------------------------------------------
+  test:
+    name: 自动化测试 (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    needs: [detect-changes]
+    if: needs.detect-changes.outputs.code_changed != 'false'
+    timeout-minutes: 15
+    strategy:
+      fail-fast: ${{ github.event_name == 'pull_request' }}
+      matrix:
+        # 分层矩阵策略：PR 仅测 3.12 极速反馈；主干推送执行多版本跨兼容性全量验证
+        python-version: ${{ github.event_name == 'pull_request' && fromJSON('["3.12"]') || fromJSON('["3.11", "3.12"]') }}
+
+    steps:
+      - name: 检出源码
+        uses: actions/checkout@v7
+
+      - name: 安装 uv 并配置 Python 环境
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          python-version: ${{ matrix.python-version }}
+
+      - name: 安装项目与开发依赖
+        run: uv sync --all-extras --dev
+
+      - name: 运行 pytest 自动化测试
+        run: uv run pytest --cov=mcp_server_reverse
+
+  # ----------------------------------------------------------------------------
+  # Job 5: 质量门禁终审盖戳 (分支保护规则唯一指定强绑门禁)
+  # ----------------------------------------------------------------------------
+  all-checks-passed:
+    name: 质量门禁终审 (All Checks Passed)
+    runs-on: ubuntu-latest
+    needs: [detect-changes, validate-pr-title, lint, test]
+    if: always()
+    timeout-minutes: 5
+    steps:
+      - name: 汇总校验各任务执行结果
+        run: |
+          TITLE_RESULT="${{ needs.validate-pr-title.result }}"
+          DETECT_RESULT="${{ needs.detect-changes.result }}"
+          LINT_RESULT="${{ needs.lint.result }}"
+          TEST_RESULT="${{ needs.test.result }}"
+
+          echo "任务状态汇总: PR标题=[$TITLE_RESULT], 变更探测=[$DETECT_RESULT], 规范扫描=[$LINT_RESULT], 单测矩阵=[$TEST_RESULT]"
+
+          if [ "$TITLE_RESULT" = "failure" ] || [ "$TITLE_RESULT" = "cancelled" ]; then
+            echo "::error::PR 标题规范校验失败！请按照 Conventional Commits 规范修改 PR 标题。"
+            exit 1
           fi
 
-      - name: 运行单元测试与覆盖率统计
-        run: |
-          if find tests -name "test_*.py" -o -name "*_test.py" 2>/dev/null | grep -q .; then
-            uv run pytest --cov=mcp_server_reverse
-          else
-            echo "暂未发现测试用例文件，跳过 pytest 执行。"
+          if [ "$DETECT_RESULT" = "failure" ] || [ "$DETECT_RESULT" = "cancelled" ]; then
+            echo "::error::变更路径探测任务异常中断！"
+            exit 1
           fi
+
+          if [ "$LINT_RESULT" = "failure" ] || [ "$LINT_RESULT" = "cancelled" ]; then
+            echo "::error::Ruff 代码规范与格式化扫描失败！"
+            exit 1
+          fi
+
+          if [ "$TEST_RESULT" = "failure" ] || [ "$TEST_RESULT" = "cancelled" ]; then
+            echo "::error::pytest 兼容性单元测试失败！门禁熔断阻断。"
+            exit 1
+          fi
+
+          echo "✅ 全部必要质量门禁已全部通过！"
+
+      - name: 生成门禁看板摘要报告
+        if: always()
+        run: |
+          {
+            echo "## 🚦 Python CI 质量门禁终审报告"
+            echo ""
+            echo "| 检查项 | 判定状态 | 执行说明 |"
+            echo "| :--- | :---: | :--- |"
+            if [ "${{ github.event_name }}" = "pull_request" ]; then
+              echo "| **PR 标题规范校验** | ${{ needs.validate-pr-title.result == 'success' && '✅ 通过' || '❌ 失败' }} | Conventional Commits 语义化规范 |"
+            fi
+            echo "| **变更路径探测** | ${{ needs.detect-changes.result == 'success' && '✅ 通过' || '❌ 异常' }} | 区分文档短路与核心代码构建 |"
+            if [ "${{ needs.detect-changes.outputs.code_changed }}" = "false" ]; then
+              echo "| **代码规范与测试** | ⚡ 短路直通 | 仅涉及文档改动，自动跳过耗时测试并放行 |"
+            else
+              echo "| **Ruff 代码规范扫描** | ${{ needs.lint.result == 'success' && '✅ 通过' || '❌ 失败' }} | 静态语法风格与自动格式化校验 |"
+              echo "| **pytest 兼容性测试** | ${{ needs.test.result == 'success' && '✅ 通过' || '❌ 失败' }} | 分层多版本兼容性矩阵验证 |"
+            fi
+            echo ""
+            echo "> 💡 **分支保护规则建议**：请在 GitHub 仓库设置中将 \`质量门禁终审 (All Checks Passed)\` 设为唯一 Required Status Check。"
+          } >> "$GITHUB_STEP_SUMMARY"
